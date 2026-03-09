@@ -8,19 +8,15 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// Config holds all runtime configuration values loaded from environment variables.
 type Config struct {
 	KafkaBrokers []string
 	KafkaTopic   string
 	ServerPort   string
+	RedisAddr    string
 }
 
-// LoadConfig loads configuration from a .env file (if present) and then
-// reads required values from environment variables. Exits immediately via
-// log.Fatal if any required value is missing.
 func LoadConfig() *Config {
-	// Best-effort load; a missing .env file is acceptable in production.
-	_ = godotenv.Load()
+	_ = godotenv.Load() // .env is optional
 
 	brokerRaw := os.Getenv("KAFKA_BROKERS")
 	if brokerRaw == "" {
@@ -37,9 +33,15 @@ func LoadConfig() *Config {
 		log.Fatal("config: SERVER_PORT is required but not set")
 	}
 
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		log.Fatal("config: REDIS_ADDR is required but not set")
+	}
+
 	return &Config{
 		KafkaBrokers: strings.Split(brokerRaw, ","),
 		KafkaTopic:   topic,
 		ServerPort:   port,
+		RedisAddr:    redisAddr,
 	}
 }

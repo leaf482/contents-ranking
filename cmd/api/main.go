@@ -33,7 +33,6 @@ func main() {
 		Handler: mux,
 	}
 
-	// Run server in a goroutine so the main goroutine can listen for signals.
 	go func() {
 		log.Printf("API Server is running on port %s", cfg.ServerPort)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -47,7 +46,6 @@ func main() {
 
 	log.Println("api: shutdown signal received")
 
-	// Give in-flight HTTP requests up to 10 s to complete.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

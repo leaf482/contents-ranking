@@ -13,19 +13,14 @@ import (
 	"contents-ranking/internal/models"
 )
 
-// Handler holds the dependencies required by the heartbeat endpoint.
 type Handler struct {
 	producer kafkapkg.Producer
 }
 
-// NewHandler constructs a Handler with the provided Kafka producer injected.
 func NewHandler(p kafkapkg.Producer) *Handler {
 	return &Handler{producer: p}
 }
 
-// HandleHeartbeat decodes an incoming POST body as a HeartbeatEvent and
-// publishes it to Kafka. The VideoID is used as the message key so that all
-// events for the same video land on the same partition.
 func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	log.Println("handler: HandleHeartbeat entered")
 	defer log.Println("handler: HandleHeartbeat exited")
@@ -51,6 +46,7 @@ func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// VideoID as key routes all events for the same video to the same partition.
 	msg := kafka.Message{
 		Key:   []byte(event.VideoID),
 		Value: payload,
