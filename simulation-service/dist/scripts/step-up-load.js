@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const SIM_URL = process.env.SIMULATION_URL ?? 'http://localhost:3000';
 const PHASE_DURATION_SEC = 120;
-const VIDEO_IDS = Array.from({ length: 20 }, (_, i) => `video${i + 1}`);
+const VIDEO_IDS = Array.from({ length: 10 }, (_, i) => `video${i + 1}`);
 const PHASES = [
     { name: 'Phase 1', type: 'normal', users: 100, duration_seconds: PHASE_DURATION_SEC },
     { name: 'Phase 2', type: 'normal', users: 300, duration_seconds: PHASE_DURATION_SEC },

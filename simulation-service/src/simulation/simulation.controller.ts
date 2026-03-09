@@ -1,11 +1,14 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { SimulationService } from './simulation.service';
 import { SimulationScenario, SimulationStatus } from './interfaces/scenario.interface';
-import { listScenarios } from './engine/scenario-registry';
+import { ScenarioRegistry } from './engine/scenario-registry';
 
 @Controller('v1/simulation')
 export class SimulationController {
-  constructor(private readonly simulationService: SimulationService) {}
+  constructor(
+    private readonly simulationService: SimulationService,
+    private readonly registry: ScenarioRegistry,
+  ) {}
 
   @Post('start')
   start(@Body() scenario: SimulationScenario): SimulationStatus {
@@ -47,6 +50,6 @@ export class SimulationController {
 
   @Get('scenarios')
   scenarios() {
-    return listScenarios();
+    return this.registry.listTemplates();
   }
 }

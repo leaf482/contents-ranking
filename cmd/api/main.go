@@ -39,8 +39,15 @@ func main() {
 		}
 	}()
 
+	rankingRepo := repository.NewRankingRepo(rdb)
+	seedCtx, seedCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := rankingRepo.SeedRankingIfEmpty(seedCtx); err != nil {
+		log.Printf("startup: ranking seed warning (non-fatal): %v", err)
+	}
+	seedCancel()
+
 	h := handler.NewHandler(producer)
-	rh := handler.NewRankingHandler(repository.NewRankingRepo(rdb))
+	rh := handler.NewRankingHandler(rankingRepo)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())

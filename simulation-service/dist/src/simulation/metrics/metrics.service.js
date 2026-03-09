@@ -5,16 +5,24 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
 var MetricsService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MetricsService = void 0;
 const common_1 = require("@nestjs/common");
+const event_log_service_1 = require("../events/event-log.service");
 const PROM_URL = process.env.PROMETHEUS_URL ?? 'http://localhost:9090';
 const CACHE_TTL_MS = 2000;
 let MetricsService = MetricsService_1 = class MetricsService {
+    eventLog;
     logger = new common_1.Logger(MetricsService_1.name);
     cache = null;
     cacheExpiry = 0;
+    constructor(eventLog) {
+        this.eventLog = eventLog;
+    }
     async getSummary() {
         const now = Date.now();
         if (this.cache && now < this.cacheExpiry) {
@@ -26,11 +34,17 @@ let MetricsService = MetricsService_1 = class MetricsService {
                 this.queryPrometheus('sum(rate(worker_events_processed_total[1m]))'),
                 this.queryPrometheus('sum(kafka_consumergroup_lag_sum)').catch(() => this.queryPrometheus('sum(kafka_consumergroup_lag)')),
             ]);
+            const events = this.eventLog.getEvents(5 * 60 * 1000).map((e) => ({
+                type: e.type,
+                scenarioId: e.scenarioId,
+                timestamp: e.timestamp,
+            }));
             const summary = {
                 rps: Math.round(rps * 100) / 100,
                 workerThroughput: Math.round(workerThroughput * 100) / 100,
                 consumerLag: Math.round(consumerLag),
                 fetchedAt: now,
+                events,
             };
             this.cache = summary;
             this.cacheExpiry = now + CACHE_TTL_MS;
@@ -43,6 +57,11 @@ let MetricsService = MetricsService_1 = class MetricsService {
                 workerThroughput: 0,
                 consumerLag: 0,
                 fetchedAt: now,
+                events: this.eventLog.getEvents(5 * 60 * 1000).map((e) => ({
+                    type: e.type,
+                    scenarioId: e.scenarioId,
+                    timestamp: e.timestamp,
+                })),
             };
         }
     }
@@ -56,6 +75,7 @@ let MetricsService = MetricsService_1 = class MetricsService {
 };
 exports.MetricsService = MetricsService;
 exports.MetricsService = MetricsService = MetricsService_1 = __decorate([
-    (0, common_1.Injectable)()
+    (0, common_1.Injectable)(),
+    __metadata("design:paramtypes", [event_log_service_1.EventLogService])
 ], MetricsService);
 //# sourceMappingURL=metrics.service.js.map

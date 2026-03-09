@@ -1,0 +1,71 @@
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import { SIMULATION_BASE } from '@/lib/config';
+import { getVideoTitle } from '@/lib/videos';
+import { motion, AnimatePresence } from 'framer-motion';
+
+interface StreamEvent {
+  userId: string;
+  videoId: string;
+  timestamp: number;
+}
+
+const MAX_EVENTS = 10;
+const POLL_MS = 250;
+
+export function LiveEventStream() {
+  const [events, setEvents] = useState<StreamEvent[]>([]);
+
+  const fetchEvents = useCallback(async () => {
+    try {
+      const res = await fetch(`${SIMULATION_BASE}/v1/events/stream`);
+      const json = await res.json();
+      const list = Array.isArray(json.events) ? json.events : [];
+      setEvents(list.slice(0, MAX_EVENTS));
+    } catch {
+      setEvents([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchEvents();
+    const id = setInterval(fetchEvents, POLL_MS);
+    return () => clearInterval(id);
+  }, [fetchEvents]);
+
+  return (
+    <div className="rounded-lg border border-gray-700 bg-gray-800/80 p-3 shadow-lg">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
+        Live Event Stream
+      </h3>
+      <div className="max-h-[200px] min-h-[80px] overflow-hidden">
+        <AnimatePresence mode="popLayout" initial={false}>
+          {events.length === 0 ? (
+            <motion.p
+              key="empty"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-xs text-gray-500"
+            >
+              No events yet
+            </motion.p>
+          ) : (
+            [...events].reverse().map((e, i) => (
+              <motion.div
+                key={`${e.timestamp}-${e.userId}-${e.videoId}-${i}`}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+                transition={{ duration: 0.25 }}
+                className="mb-1.5 text-xs font-mono text-gray-300"
+              >
+                User {e.userId} → {getVideoTitle(e.videoId)} (+1)
+              </motion.div>
+            ))
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+}

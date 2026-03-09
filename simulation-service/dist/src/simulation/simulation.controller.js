@@ -19,8 +19,10 @@ const scenario_interface_1 = require("./interfaces/scenario.interface");
 const scenario_registry_1 = require("./engine/scenario-registry");
 let SimulationController = class SimulationController {
     simulationService;
-    constructor(simulationService) {
+    registry;
+    constructor(simulationService, registry) {
         this.simulationService = simulationService;
+        this.registry = registry;
     }
     start(scenario) {
         return this.simulationService.start(scenario);
@@ -47,7 +49,7 @@ let SimulationController = class SimulationController {
         return this.simulationService.getStatus();
     }
     scenarios() {
-        return (0, scenario_registry_1.listScenarios)();
+        return this.registry.listTemplates();
     }
 };
 exports.SimulationController = SimulationController;
@@ -103,6 +105,7 @@ __decorate([
 ], SimulationController.prototype, "scenarios", null);
 exports.SimulationController = SimulationController = __decorate([
     (0, common_1.Controller)('v1/simulation'),
-    __metadata("design:paramtypes", [simulation_service_1.SimulationService])
+    __metadata("design:paramtypes", [simulation_service_1.SimulationService,
+        scenario_registry_1.ScenarioRegistry])
 ], SimulationController);
 //# sourceMappingURL=simulation.controller.js.map

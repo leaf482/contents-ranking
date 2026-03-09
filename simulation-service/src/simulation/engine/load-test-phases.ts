@@ -8,7 +8,7 @@
 
 import { SimulationScenario } from '../interfaces/scenario.interface';
 
-const DEFAULT_VIDEO_IDS = Array.from({ length: 20 }, (_, i) => `video${i + 1}`);
+const DEFAULT_VIDEO_IDS = Array.from({ length: 10 }, (_, i) => `video${i + 1}`);
 
 export interface LoadTestPhase {
   name: string;

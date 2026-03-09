@@ -46,9 +46,17 @@ const http = __importStar(require("http"));
 const https = __importStar(require("https"));
 const simulation_controller_1 = require("./simulation.controller");
 const simulation_service_1 = require("./simulation.service");
-const load_strategy_1 = require("./strategies/load.strategy");
-const run_manager_1 = require("./engine/run-manager");
-const task_manager_1 = require("./engine/task-manager");
+const factory_controller_1 = require("./factory/factory.controller");
+const factory_service_1 = require("./factory/factory.service");
+const chaos_controller_1 = require("./chaos/chaos.controller");
+const chaos_service_1 = require("./chaos/chaos.service");
+const event_log_service_1 = require("./events/event-log.service");
+const event_stream_service_1 = require("./events/event-stream.service");
+const events_controller_1 = require("./events/events.controller");
+const scenario_registry_1 = require("./engine/scenario-registry");
+const command_queue_1 = require("./engine/command-queue");
+const attribution_index_1 = require("./engine/attribution-index");
+const batch_sender_1 = require("./engine/batch-sender");
 const master_tick_scheduler_1 = require("./engine/master-tick-scheduler");
 const metrics_controller_1 = require("./metrics/metrics.controller");
 const metrics_service_1 = require("./metrics/metrics.service");
@@ -63,12 +71,23 @@ exports.SimulationModule = SimulationModule = __decorate([
                 httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 100 }),
             }),
         ],
-        controllers: [simulation_controller_1.SimulationController, metrics_controller_1.MetricsController],
+        controllers: [
+            simulation_controller_1.SimulationController,
+            factory_controller_1.FactoryController,
+            chaos_controller_1.ChaosController,
+            metrics_controller_1.MetricsController,
+            events_controller_1.EventsController,
+        ],
         providers: [
             simulation_service_1.SimulationService,
-            load_strategy_1.LoadStrategy,
-            run_manager_1.RunManager,
-            task_manager_1.TaskManager,
+            factory_service_1.FactoryService,
+            chaos_service_1.ChaosService,
+            event_log_service_1.EventLogService,
+            event_stream_service_1.EventStreamService,
+            scenario_registry_1.ScenarioRegistry,
+            command_queue_1.CommandQueue,
+            attribution_index_1.AttributionIndex,
+            batch_sender_1.BatchSender,
             master_tick_scheduler_1.MasterTickScheduler,
             metrics_service_1.MetricsService,
         ],

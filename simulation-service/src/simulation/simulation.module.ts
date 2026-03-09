@@ -4,9 +4,17 @@ import * as http from 'http';
 import * as https from 'https';
 import { SimulationController } from './simulation.controller';
 import { SimulationService } from './simulation.service';
-import { LoadStrategy } from './strategies/load.strategy';
-import { RunManager } from './engine/run-manager';
-import { TaskManager } from './engine/task-manager';
+import { FactoryController } from './factory/factory.controller';
+import { FactoryService } from './factory/factory.service';
+import { ChaosController } from './chaos/chaos.controller';
+import { ChaosService } from './chaos/chaos.service';
+import { EventLogService } from './events/event-log.service';
+import { EventStreamService } from './events/event-stream.service';
+import { EventsController } from './events/events.controller';
+import { ScenarioRegistry } from './engine/scenario-registry';
+import { CommandQueue } from './engine/command-queue';
+import { AttributionIndex } from './engine/attribution-index';
+import { BatchSender } from './engine/batch-sender';
 import { MasterTickScheduler } from './engine/master-tick-scheduler';
 import { MetricsController } from './metrics/metrics.controller';
 import { MetricsService } from './metrics/metrics.service';
@@ -18,12 +26,23 @@ import { MetricsService } from './metrics/metrics.service';
       httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 100 }),
     }),
   ],
-  controllers: [SimulationController, MetricsController],
+  controllers: [
+    SimulationController,
+    FactoryController,
+    ChaosController,
+    MetricsController,
+    EventsController,
+  ],
   providers: [
     SimulationService,
-    LoadStrategy,
-    RunManager,
-    TaskManager,
+    FactoryService,
+    ChaosService,
+    EventLogService,
+    EventStreamService,
+    ScenarioRegistry,
+    CommandQueue,
+    AttributionIndex,
+    BatchSender,
     MasterTickScheduler,
     MetricsService,
   ],

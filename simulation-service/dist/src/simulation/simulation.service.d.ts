@@ -1,18 +1,23 @@
 import { OnModuleInit } from '@nestjs/common';
 import { SimulationScenario, SimulationStatus } from './interfaces/scenario.interface';
 import { MasterTickScheduler } from './engine/master-tick-scheduler';
-import { RunManager } from './engine/run-manager';
+import { ScenarioRegistry } from './engine/scenario-registry';
 export declare class SimulationService implements OnModuleInit {
     private readonly scheduler;
-    private readonly runManager;
+    private readonly registry;
     private readonly logger;
     private loadTestPhaseIndex;
-    constructor(scheduler: MasterTickScheduler, runManager: RunManager);
+    private loadTestTimeoutId;
+    constructor(scheduler: MasterTickScheduler, registry: ScenarioRegistry);
     onModuleInit(): void;
-    start(scenario: SimulationScenario): SimulationStatus;
-    startByScenarioId(scenarioId: string): SimulationStatus;
+    start(scenario: SimulationScenario): {
+        run_id: string;
+    } & SimulationStatus;
+    startByScenarioId(scenarioId: string): {
+        run_id: string;
+    } & SimulationStatus;
     private runLoadTest;
-    private scheduleNextPhase;
+    private scheduleLoadTestNextPhase;
     stop(): SimulationStatus;
     getStatus(): SimulationStatus & {
         run_id?: string;

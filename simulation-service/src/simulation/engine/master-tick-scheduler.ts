@@ -1,12 +1,18 @@
 /**
- * Master Tick Scheduler: Single 100ms setInterval loop.
- * Drives TaskManager each tick when a run is active.
+ * Master Tick Scheduler: 100ms period.
+ * - Processes CommandQueue at tick start (coalesce → Registry)
+ * - Iterates all 'running' scenarios, aggregates heartbeats
+ * - Sends aggregated batch to Go API in one call
  */
 
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { SimulationScenario } from '../interfaces/scenario.interface';
-import { RunManager } from './run-manager';
-import { TaskManager } from './task-manager';
+import { Scenario, ScenarioConfig } from './scenario-registry';
+import { ScenarioRegistry } from './scenario-registry';
+import { CommandQueue, QueuedCommand } from './command-queue';
+import { AttributionIndex } from './attribution-index';
+import { BatchSender, HeartbeatPayload } from './batch-sender';
+import { EventLogService } from '../events/event-log.service';
+import { EventStreamService } from '../events/event-stream.service';
 
 const TICK_MS = 100;
 const DEFAULT_API_URL = process.env.RANKING_API_URL ?? 'http://localhost:8080/v1/heartbeat';
@@ -15,150 +21,222 @@ const DEFAULT_API_URL = process.env.RANKING_API_URL ?? 'http://localhost:8080/v1
 export class MasterTickScheduler implements OnModuleDestroy {
   private readonly logger = new Logger(MasterTickScheduler.name);
   private intervalId: ReturnType<typeof setInterval> | null = null;
-  private playheads = new Map<string, number>();
-  private elapsedTicks = 0;
-  private activeUsers = 0;
-  private usersPerRampTick: number = 0;
-  private stopped = false;
-  private paused = false;
-  /** Spike overlay: extra users for a limited time */
-  private spikeOverlayUsers = 0;
-  private spikeOverlayEndMs = 0;
 
   constructor(
-    private readonly taskManager: TaskManager,
-    private readonly runManager: RunManager,
+    private readonly registry: ScenarioRegistry,
+    private readonly commandQueue: CommandQueue,
+    private readonly attributionIndex: AttributionIndex,
+    private readonly batchSender: BatchSender,
+    private readonly eventLog: EventLogService,
+    private readonly eventStream: EventStreamService,
   ) {}
 
   onModuleDestroy(): void {
     this.stop();
   }
 
-  /** Start the master tick loop (idle until a run is started) */
   start(): void {
     if (this.intervalId) return;
     this.intervalId = setInterval(() => this.tick(), TICK_MS);
     this.logger.log('Master tick scheduler started (100ms period)');
   }
 
-  /** Stop the master tick loop */
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
-    this.stopped = true;
     this.logger.log('Master tick scheduler stopped');
   }
 
-  /** Begin a simulation run (called by SimulationService) */
-  beginRun(scenario: SimulationScenario): void {
-    this.runManager.startRun(scenario);
-    this.playheads.clear();
-    this.elapsedTicks = 0;
-    this.activeUsers = 0;
-    this.usersPerRampTick = Math.max(
-      1,
-      Math.floor(scenario.users / Math.max(scenario.ramp_up_seconds * (1000 / TICK_MS), 1)),
-    );
-    this.stopped = false;
+  enqueueStart(scenarioId: string, name: string, config: ScenarioConfig): void {
+    this.commandQueue.enqueue({
+      scenarioId,
+      command: 'start',
+      name,
+      config,
+    });
   }
 
-  /** End the current run */
-  endRun(): void {
-    this.stopped = true;
-    this.paused = false;
-    this.spikeOverlayUsers = 0;
-    this.runManager.stopRun();
+  enqueuePause(scenarioId: string): void {
+    this.commandQueue.enqueue({ scenarioId, command: 'pause' });
   }
 
-  /** Switch to next phase (keep run_id, sent, errors; reset tick state) */
-  switchPhase(scenario: SimulationScenario): void {
-    this.runManager.switchPhase(scenario);
-    this.playheads.clear();
-    this.elapsedTicks = 0;
-    this.activeUsers = 0;
-    this.usersPerRampTick = Math.max(
-      1,
-      Math.floor(scenario.users / Math.max(scenario.ramp_up_seconds * (1000 / TICK_MS), 1)),
-    );
-    this.stopped = false;
+  enqueueResume(scenarioId: string): void {
+    this.commandQueue.enqueue({ scenarioId, command: 'resume' });
   }
 
-  /** Pause heartbeat sending (run state preserved) */
-  setPaused(p: boolean): void {
-    this.paused = p;
+  enqueueStop(scenarioId: string): void {
+    this.commandQueue.enqueue({ scenarioId, command: 'stop' });
   }
 
-  isPaused(): boolean {
-    return this.paused;
+  enqueueSwitchPhase(scenarioId: string, config: ScenarioConfig): void {
+    this.commandQueue.enqueue({
+      scenarioId,
+      command: 'switch_phase',
+      config,
+    });
   }
 
-  /** Inject 5s spike overlay: 3000 extra users */
-  injectSpikeOverlay(users = 3000, durationSec = 5): void {
-    this.spikeOverlayUsers = users;
-    this.spikeOverlayEndMs = Date.now() + durationSec * 1000;
-    this.logger.log(`spike overlay: +${users} users for ${durationSec}s`);
+  /** Apply spike to a specific scenario (multiplier x for durationMs) */
+  enqueueSpike(scenarioId: string, multiplier: number, durationMs: number): void {
+    const s = this.registry.get(scenarioId);
+    if (s) this.registry.setSpike(scenarioId, multiplier, durationMs);
   }
 
-  private getActiveUsers(): number {
-    return this.activeUsers;
+  /** Apply spike to all running scenarios */
+  enqueueLoadSpike(multiplier: number, durationMs: number): void {
+    this.registry.setSpikeAll(multiplier, durationMs);
   }
 
-  private getElapsedTicks(): number {
-    return this.elapsedTicks;
+  private applyCommands(commands: QueuedCommand[]): void {
+    for (const cmd of commands) {
+      switch (cmd.command) {
+        case 'start':
+          if (cmd.config && cmd.name) {
+            const existing = this.registry.get(cmd.scenarioId);
+            if (existing) {
+              this.attributionIndex.clearScenario(cmd.scenarioId, existing.config.targetVideoId);
+            }
+            const scenario = this.registry.create(cmd.scenarioId, cmd.name, cmd.config);
+            if (cmd.initialStatus === 'paused') {
+              this.registry.setStatus(cmd.scenarioId, 'paused');
+            }
+            this.attributionIndex.setScenarioVideo(cmd.scenarioId, cmd.config.targetVideoId);
+            this.eventLog.record('start', cmd.scenarioId);
+            this.logger.log(
+              `started ${cmd.scenarioId} (${cmd.config.users} users)${cmd.initialStatus === 'paused' ? ' [paused]' : ''}`,
+            );
+          }
+          break;
+        case 'pause':
+          this.registry.setStatus(cmd.scenarioId, 'paused');
+          this.eventLog.record('pause', cmd.scenarioId);
+          this.logger.debug(`paused ${cmd.scenarioId}`);
+          break;
+        case 'resume':
+          this.registry.setStatus(cmd.scenarioId, 'running');
+          this.eventLog.record('resume', cmd.scenarioId);
+          this.logger.debug(`resumed ${cmd.scenarioId}`);
+          break;
+        case 'stop':
+          const s = this.registry.get(cmd.scenarioId);
+          if (s) {
+            this.attributionIndex.clearScenario(cmd.scenarioId, s.config.targetVideoId);
+            this.registry.setStatus(cmd.scenarioId, 'stopped');
+            this.registry.remove(cmd.scenarioId);
+            this.eventLog.record('stop', cmd.scenarioId);
+            this.logger.log(`stopped ${cmd.scenarioId}`);
+          }
+          break;
+        case 'switch_phase':
+          if (cmd.config) {
+            const existing = this.registry.get(cmd.scenarioId);
+            if (existing) {
+              this.attributionIndex.clearScenario(cmd.scenarioId, existing.config.targetVideoId);
+            }
+            this.registry.updateConfig(cmd.scenarioId, cmd.config);
+            if (cmd.config.targetVideoId) {
+              this.attributionIndex.setScenarioVideo(cmd.scenarioId, cmd.config.targetVideoId);
+            }
+            this.logger.log(`switch_phase ${cmd.scenarioId} (${cmd.config.users} users)`);
+          }
+          break;
+      }
+    }
+  }
+
+  private computeEventsPerTick(scenario: Scenario): number {
+    const { intervalMs } = scenario.config;
+    const activeUsers = scenario.activeUsers;
+    if (activeUsers <= 0) return 0;
+    let events = Math.round((activeUsers * TICK_MS) / intervalMs);
+    if (scenario.loadMultiplier && scenario.spikeEndMs && Date.now() < scenario.spikeEndMs) {
+      events = Math.round(events * scenario.loadMultiplier);
+    } else if (scenario.spikeEndMs && Date.now() >= scenario.spikeEndMs) {
+      scenario.loadMultiplier = undefined;
+      scenario.spikeEndMs = undefined;
+    }
+    return events;
+  }
+
+  private buildPayloads(scenario: Scenario, count: number): HeartbeatPayload[] {
+    const { targetVideoId, watchSeconds } = scenario.config;
+    const prefix = `${scenario.id}-`;
+    const payloads: HeartbeatPayload[] = [];
+    const now = Date.now();
+
+    for (let i = 0; i < count; i++) {
+      const userIdx = i % scenario.activeUsers;
+      const userId = `${prefix}user-${userIdx + 1}`;
+      const prev = scenario.playheads.get(userId) ?? 0;
+      const next = prev + watchSeconds * 1000;
+      scenario.playheads.set(userId, next);
+
+      payloads.push({
+        session_id: `sim-${userId}`,
+        user_id: userId,
+        video_id: targetVideoId,
+        playhead: next,
+        timestamp: now,
+      });
+    }
+    return payloads;
   }
 
   private async tick(): Promise<void> {
-    const state = this.runManager.getState();
-    if (!state.running || this.stopped || !state.scenario) {
-      return;
+    const commands = this.commandQueue.drain();
+    if (commands.length > 0) {
+      this.applyCommands(commands);
     }
 
-    // Expire spike overlay
-    if (this.spikeOverlayUsers > 0 && Date.now() >= this.spikeOverlayEndMs) {
-      this.spikeOverlayUsers = 0;
+    const running = this.registry.getRunning();
+    if (running.length === 0) return;
+
+    const allPayloads: HeartbeatPayload[] = [];
+    const countsPerScenario: Map<string, number> = new Map();
+
+    for (const scenario of running) {
+      scenario.elapsedTicks++;
+
+      if (scenario.config.durationTicks && scenario.elapsedTicks >= scenario.config.durationTicks) {
+        this.attributionIndex.clearScenario(scenario.id, scenario.config.targetVideoId);
+        this.registry.remove(scenario.id);
+        this.logger.log(`scenario ${scenario.id} duration reached, stopped`);
+        continue;
+      }
+
+      if (scenario.elapsedTicks < scenario.rampUpTicks) {
+        scenario.activeUsers = Math.min(
+          scenario.activeUsers + Math.max(1, Math.floor(scenario.config.users / scenario.rampUpTicks)),
+          scenario.config.users,
+        );
+      } else {
+        scenario.activeUsers = scenario.config.users;
+      }
+
+      const eventsCount = this.computeEventsPerTick(scenario);
+      if (eventsCount > 0) {
+        const payloads = this.buildPayloads(scenario, eventsCount);
+        allPayloads.push(...payloads);
+        countsPerScenario.set(scenario.id, payloads.length);
+      }
     }
 
-    const scenario = state.scenario;
-    const rampTicks = Math.ceil((scenario.ramp_up_seconds * 1000) / TICK_MS);
-
-    // Ramp-up
-    if (this.elapsedTicks < rampTicks) {
-      this.activeUsers = Math.min(
-        this.activeUsers + this.usersPerRampTick,
-        scenario.users,
+    if (allPayloads.length > 0) {
+      this.eventStream.pushBatch(
+        allPayloads.map((p) => ({ user_id: p.user_id, video_id: p.video_id })),
       );
-    } else {
-      this.activeUsers = scenario.users;
+      const { sent } = await this.batchSender.sendBatch(allPayloads, DEFAULT_API_URL);
+      const ratio = sent / allPayloads.length;
+      for (const [id, count] of countsPerScenario) {
+        const s = this.registry.get(id);
+        if (s) s.stats.emittedEvents += Math.round(count * ratio);
+      }
     }
+  }
 
-    // Skip sending when paused
-    if (this.paused) {
-      this.elapsedTicks++;
-      return;
-    }
-
-    // Add spike overlay users to effective load
-    const effectiveUsers = this.activeUsers + this.spikeOverlayUsers;
-
-    const config = {
-      targetUrl: DEFAULT_API_URL,
-      scenario,
-      getActiveUsers: () => effectiveUsers,
-      getElapsedTicks: () => this.elapsedTicks,
-    };
-
-    const { sent, errors } = await this.taskManager.executeTick(config, this.playheads);
-    this.runManager.recordTick(sent, errors);
-
-    this.elapsedTicks++;
-
-    // Duration check
-    const elapsedSeconds = (this.elapsedTicks * TICK_MS) / 1000;
-    if (scenario.duration_seconds && elapsedSeconds >= scenario.duration_seconds) {
-      this.logger.log(`simulation duration reached (${scenario.duration_seconds}s), stopping`);
-      this.endRun();
-    }
+  getRegistry(): ScenarioRegistry {
+    return this.registry;
   }
 }

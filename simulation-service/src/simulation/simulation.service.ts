@@ -1,9 +1,6 @@
 import { ConflictException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { SimulationScenario, SimulationStatus } from './interfaces/scenario.interface';
-import {
-  getScenario,
-  toSimulationScenario,
-} from './engine/scenario-registry';
+import { ScenarioConfig } from './engine/scenario-registry';
 import {
   LOAD_TEST_PHASES,
   phaseToScenario,
@@ -11,16 +8,30 @@ import {
   COOLDOWN_MS,
 } from './engine/load-test-phases';
 import { MasterTickScheduler } from './engine/master-tick-scheduler';
-import { RunManager } from './engine/run-manager';
+import { ScenarioRegistry } from './engine/scenario-registry';
+
+const DEFAULT_VIDEO_IDS = Array.from({ length: 10 }, (_, i) => `video${i + 1}`);
+
+function toScenarioConfig(scenario: SimulationScenario): ScenarioConfig {
+  const durationSec = scenario.duration_seconds;
+  return {
+    users: scenario.users,
+    targetVideoId: scenario.video_ids?.[0] ?? DEFAULT_VIDEO_IDS[0],
+    watchSeconds: scenario.watch_seconds ?? 30,
+    intervalMs: Math.round(1000 / Math.max(1, scenario.events_per_second ?? 2)),
+    durationTicks: durationSec ? durationSec * 10 : undefined,
+  };
+}
 
 @Injectable()
 export class SimulationService implements OnModuleInit {
   private readonly logger = new Logger(SimulationService.name);
   private loadTestPhaseIndex = 0;
+  private loadTestTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly scheduler: MasterTickScheduler,
-    private readonly runManager: RunManager,
+    private readonly registry: ScenarioRegistry,
   ) {}
 
   onModuleInit(): void {
@@ -28,122 +39,181 @@ export class SimulationService implements OnModuleInit {
   }
 
   /** Start simulation with full scenario (legacy / script compatibility) */
-  start(scenario: SimulationScenario): SimulationStatus {
-    if (this.runManager.getState().running) {
+  start(scenario: SimulationScenario): { run_id: string } & SimulationStatus {
+    const running = this.registry.getRunning();
+    if (running.length > 0) {
       throw new ConflictException('A simulation is already running');
     }
 
-    this.scheduler.beginRun(scenario);
-    const state = this.runManager.getState();
-
-    this.logger.log(
-      `run_id=${state.run_id} starting type=${scenario.type} users=${scenario.users} eps=${scenario.events_per_second}`,
-    );
+    const config = toScenarioConfig(scenario);
+    const scenarioId = `run-${Date.now().toString(36)}`;
+    this.scheduler.enqueueStart(scenarioId, scenario.name, config);
 
     return {
-      running: state.running,
-      scenario: state.scenario,
-      sent: state.sent,
-      errors: state.errors,
-      started_at: state.started_at,
+      run_id: scenarioId,
+      running: true,
+      scenario,
+      sent: 0,
+      errors: 0,
+      started_at: new Date(),
     };
   }
 
   /** Start simulation by registered scenario id */
-  startByScenarioId(scenarioId: string): SimulationStatus {
+  startByScenarioId(scenarioId: string): { run_id: string } & SimulationStatus {
     if (scenarioId === 'load_test') {
       return this.runLoadTest();
     }
-    const registered = getScenario(scenarioId);
-    if (!registered) {
+
+    const template = this.registry.getTemplate(scenarioId);
+    if (!template) {
       throw new ConflictException(`Unknown scenario: ${scenarioId}`);
     }
-    const scenario = toSimulationScenario(registered);
-    return this.start(scenario);
-  }
 
-  /** Run Load Test preset: 4-phase step-up sequence */
-  private runLoadTest(): SimulationStatus {
-    if (this.runManager.getState().running) {
-      throw new ConflictException('A simulation is already running');
+    const running = this.registry.getRunning();
+    if (running.some((s) => s.id === scenarioId)) {
+      throw new ConflictException(`Scenario ${scenarioId} is already running`);
     }
-    this.loadTestPhaseIndex = 0;
-    const phase = LOAD_TEST_PHASES[0];
-    const scenario = phaseToScenario(phase);
-    this.scheduler.beginRun(scenario);
-    const state = this.runManager.getState();
-    this.logger.log(
-      `load_test run_id=${state.run_id} starting ${phase.name} (${phase.users} users, ${phase.duration_seconds}s)`,
-    );
-    this.scheduleNextPhase();
+
+    const videoId = template.targetVideoId ?? DEFAULT_VIDEO_IDS[0];
+    const config: ScenarioConfig = {
+      users: template.users,
+      targetVideoId: videoId,
+      watchSeconds: template.watchSeconds,
+      intervalMs: template.intervalMs,
+      durationTicks: template.duration_seconds ? template.duration_seconds * 10 : undefined,
+    };
+
+    this.scheduler.enqueueStart(scenarioId, template.name, config);
+
     return {
-      running: state.running,
-      scenario: state.scenario,
-      sent: state.sent,
-      errors: state.errors,
-      started_at: state.started_at,
+      run_id: scenarioId,
+      running: true,
+      scenario: null,
+      sent: 0,
+      errors: 0,
+      started_at: new Date(),
     };
   }
 
-  private scheduleNextPhase(): void {
-    const phase = LOAD_TEST_PHASES[this.loadTestPhaseIndex];
-    const durationMs = getPhaseDurationMs(phase);
-    setTimeout(() => {
-      const state = this.runManager.getState();
-      if (!state.running) return;
-      this.scheduler.endRun();
+  private runLoadTest(): { run_id: string } & SimulationStatus {
+    const running = this.registry.getRunning();
+    if (running.length > 0) {
+      throw new ConflictException('A simulation is already running');
+    }
+
+    this.loadTestPhaseIndex = 0;
+    const phase = LOAD_TEST_PHASES[0];
+    const scenario = phaseToScenario(phase);
+    const config = toScenarioConfig(scenario);
+
+    this.scheduler.enqueueStart('load_test', phase.name, config);
+    this.scheduleLoadTestNextPhase();
+
+    return {
+      run_id: 'load_test',
+      running: true,
+      scenario,
+      sent: 0,
+      errors: 0,
+      started_at: new Date(),
+    };
+  }
+
+  private scheduleLoadTestNextPhase(): void {
+    this.loadTestTimeoutId = setTimeout(() => {
+      this.loadTestTimeoutId = null;
+      const s = this.registry.get('load_test');
+      if (!s) return;
+
+      this.scheduler.enqueueStop('load_test');
       this.loadTestPhaseIndex++;
+
       if (this.loadTestPhaseIndex >= LOAD_TEST_PHASES.length) {
-        this.logger.log(`load_test complete — sent=${state.sent} errors=${state.errors}`);
+        this.logger.log(
+          `load_test complete — emitted=${s.stats.emittedEvents}`,
+        );
         return;
       }
+
       setTimeout(() => {
-        const nextPhase = LOAD_TEST_PHASES[this.loadTestPhaseIndex];
-        const scenario = phaseToScenario(nextPhase);
-        this.scheduler.switchPhase(scenario);
+        const phase = LOAD_TEST_PHASES[this.loadTestPhaseIndex];
+        const scenario = phaseToScenario(phase);
+        const config = toScenarioConfig(scenario);
+        config.durationTicks = phase.duration_seconds * 10;
+        this.scheduler.enqueueSwitchPhase('load_test', config);
         this.logger.log(
-          `load_test ${nextPhase.name} (${nextPhase.users} users, ${nextPhase.duration_seconds}s)`,
+          `load_test ${phase.name} (${phase.users} users, ${phase.duration_seconds}s)`,
         );
-        this.scheduleNextPhase();
+        this.scheduleLoadTestNextPhase();
       }, COOLDOWN_MS);
-    }, durationMs);
+    }, getPhaseDurationMs(LOAD_TEST_PHASES[this.loadTestPhaseIndex]));
   }
 
   stop(): SimulationStatus {
-    this.scheduler.endRun();
-    const state = this.runManager.getState();
-    this.logger.log(
-      `run_id=${state.run_id} stopped — sent=${state.sent} errors=${state.errors}`,
-    );
+    const running = this.registry.getRunning();
+    for (const s of running) {
+      this.scheduler.enqueueStop(s.id);
+    }
+    if (this.loadTestTimeoutId) {
+      clearTimeout(this.loadTestTimeoutId);
+      this.loadTestTimeoutId = null;
+    }
+    const totalEmitted = running.reduce((a, s) => a + s.stats.emittedEvents, 0);
+    this.logger.log(`stopped — total emitted=${totalEmitted}`);
     return {
       running: false,
-      scenario: state.scenario,
-      sent: state.sent,
-      errors: state.errors,
-      started_at: state.started_at,
+      scenario: null,
+      sent: totalEmitted,
+      errors: 0,
+      started_at: null,
     };
   }
 
   getStatus(): SimulationStatus & { run_id?: string; paused?: boolean } {
-    const state = this.runManager.getState();
+    const running = this.registry.getRunning();
+    const paused = this.registry.getAll().filter((s) => s.status === 'paused');
+    const totalEmitted = this.registry
+      .getAll()
+      .reduce((a, s) => a + s.stats.emittedEvents, 0);
+    const firstRunning = running[0];
+
     return {
-      ...state,
-      run_id: state.run_id,
-      paused: this.scheduler.isPaused(),
+      run_id: firstRunning?.id ?? '',
+      running: running.length > 0,
+      paused: paused.length > 0 && running.length === 0,
+      scenario: null,
+      sent: totalEmitted,
+      errors: 0,
+      started_at: null,
     };
   }
 
   pause(): void {
-    this.scheduler.setPaused(true);
+    const running = this.registry.getRunning();
+    for (const s of running) {
+      this.scheduler.enqueuePause(s.id);
+    }
     this.logger.log('simulation paused');
   }
 
   resume(): void {
-    this.scheduler.setPaused(false);
+    const paused = this.registry.getAll().filter((s) => s.status === 'paused');
+    for (const s of paused) {
+      this.scheduler.enqueueResume(s.id);
+    }
     this.logger.log('simulation resumed');
   }
 
   injectSpike(users = 3000, durationSec = 5): void {
-    this.scheduler.injectSpikeOverlay(users, durationSec);
+    this.scheduler.enqueueStart('spike-overlay', `Spike +${users}`, {
+      users,
+      targetVideoId: DEFAULT_VIDEO_IDS[0],
+      watchSeconds: 30,
+      intervalMs: 333,
+    });
+    setTimeout(() => {
+      this.scheduler.enqueueStop('spike-overlay');
+    }, durationSec * 1000);
   }
 }

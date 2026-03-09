@@ -1,8 +1,10 @@
 import { SimulationService } from './simulation.service';
 import { SimulationScenario, SimulationStatus } from './interfaces/scenario.interface';
+import { ScenarioRegistry } from './engine/scenario-registry';
 export declare class SimulationController {
     private readonly simulationService;
-    constructor(simulationService: SimulationService);
+    private readonly registry;
+    constructor(simulationService: SimulationService, registry: ScenarioRegistry);
     start(scenario: SimulationScenario): SimulationStatus;
     startByScenario(scenarioId: string): SimulationStatus;
     stop(): SimulationStatus;
@@ -18,5 +20,5 @@ export declare class SimulationController {
     status(): SimulationStatus & {
         run_id?: string;
     };
-    scenarios(): import("./engine/scenario-registry").RegisteredScenario[];
+    scenarios(): import("./engine/scenario-registry").ScenarioTemplate[];
 }

@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.COOLDOWN_MS = exports.LOAD_TEST_PHASES = void 0;
 exports.phaseToScenario = phaseToScenario;
 exports.getPhaseDurationMs = getPhaseDurationMs;
-const DEFAULT_VIDEO_IDS = Array.from({ length: 20 }, (_, i) => `video${i + 1}`);
+const DEFAULT_VIDEO_IDS = Array.from({ length: 10 }, (_, i) => `video${i + 1}`);
 exports.LOAD_TEST_PHASES = [
     { name: 'Phase 1', users: 100, duration_seconds: 120 },
     { name: 'Phase 2', users: 300, duration_seconds: 120 },

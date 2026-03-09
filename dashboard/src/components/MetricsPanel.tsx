@@ -15,6 +15,7 @@ import {
   LineChart,
   Line,
   Legend,
+  ReferenceLine,
 } from 'recharts';
 
 const MAX_POINTS = 25;
@@ -27,14 +28,36 @@ interface DataPoint {
   consumerLag: number;
 }
 
+interface ChartEvent {
+  type: string;
+  scenarioId?: string;
+  timestamp: number;
+}
+
 function slidingWindow<T>(arr: T[], item: T, max: number): T[] {
   const next = [...arr, item];
   return next.length > max ? next.slice(-max) : next;
 }
 
+function findClosestTime(data: DataPoint[], ts: number): string | undefined {
+  if (data.length === 0) return undefined;
+  let closest = data[0];
+  let minDiff = Math.abs(data[0].ts - ts);
+  for (const d of data) {
+    const diff = Math.abs(d.ts - ts);
+    if (diff < minDiff) {
+      minDiff = diff;
+      closest = d;
+    }
+  }
+  return closest.time;
+}
+
 export function MetricsPanel() {
   const [data, setData] = useState<DataPoint[]>([]);
+  const [events, setEvents] = useState<ChartEvent[]>([]);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+
   const fetchMetrics = useCallback(async () => {
     try {
       const res = await fetch(`${SIMULATION_BASE}/api/v1/metrics/summary`);
@@ -48,6 +71,7 @@ export function MetricsPanel() {
         consumerLag: Number(json.consumerLag) || 0,
       };
       setData((prev) => slidingWindow(prev, point, MAX_POINTS));
+      setEvents(Array.isArray(json.events) ? json.events : []);
       setLastSyncedAt(now);
     } catch {
       // Keep previous
@@ -84,6 +108,25 @@ export function MetricsPanel() {
                     labelStyle={{ color: '#9ca3af' }}
                   />
                   <Legend />
+                  {events
+                    .filter((e) => ['start', 'spike', 'load_spike'].includes(e.type))
+                    .map((e) => {
+                      const x = findClosestTime(data, e.timestamp);
+                      return x ? (
+                        <ReferenceLine
+                          key={`${e.type}-${e.timestamp}`}
+                          x={x}
+                          stroke={e.type === 'spike' || e.type === 'load_spike' ? '#ef4444' : '#10b981'}
+                          strokeDasharray="3 3"
+                          label={{
+                            value: e.type === 'load_spike' ? 'Load Spike' : e.type === 'spike' ? `Spike ${e.scenarioId ?? ''}` : `Start ${e.scenarioId ?? ''}`,
+                            position: 'top',
+                            fill: e.type === 'spike' || e.type === 'load_spike' ? '#ef4444' : '#10b981',
+                            fontSize: 9,
+                          }}
+                        />
+                      ) : null;
+                    })}
                   <Line
                     type="monotone"
                     dataKey="rps"
@@ -109,6 +152,19 @@ export function MetricsPanel() {
               <p className="mb-1 text-xs text-red-400/90">Kafka Consumer Lag</p>
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={data} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                  {events
+                    .filter((e) => ['start', 'spike', 'load_spike'].includes(e.type))
+                    .map((e) => {
+                      const x = findClosestTime(data, e.timestamp);
+                      return x ? (
+                        <ReferenceLine
+                          key={`lag-${e.type}-${e.timestamp}`}
+                          x={x}
+                          stroke={e.type === 'spike' || e.type === 'load_spike' ? '#ef4444' : '#10b981'}
+                          strokeDasharray="2 2"
+                        />
+                      ) : null;
+                    })}
                   <defs>
                     <linearGradient id="lagGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#ef4444" stopOpacity={0.4} />
