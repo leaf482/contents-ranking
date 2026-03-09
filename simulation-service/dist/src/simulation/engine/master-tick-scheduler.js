@@ -155,7 +155,8 @@ let MasterTickScheduler = MasterTickScheduler_1 = class MasterTickScheduler {
         return events;
     }
     buildPayloads(scenario, count) {
-        const { targetVideoId, watchSeconds } = scenario.config;
+        const { targetVideoId, watchSeconds, intervalMs } = scenario.config;
+        const maxPlayheadMs = watchSeconds * 1000;
         const prefix = `${scenario.id}-`;
         const payloads = [];
         const now = Date.now();
@@ -163,7 +164,9 @@ let MasterTickScheduler = MasterTickScheduler_1 = class MasterTickScheduler {
             const userIdx = i % scenario.activeUsers;
             const userId = `${prefix}user-${userIdx + 1}`;
             const prev = scenario.playheads.get(userId) ?? 0;
-            const next = prev + watchSeconds * 1000;
+            if (prev >= maxPlayheadMs)
+                continue;
+            const next = Math.min(prev + intervalMs, maxPlayheadMs);
             scenario.playheads.set(userId, next);
             payloads.push({
                 session_id: `sim-${userId}`,

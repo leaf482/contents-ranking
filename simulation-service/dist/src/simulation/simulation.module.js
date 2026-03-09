@@ -47,6 +47,7 @@ const https = __importStar(require("https"));
 const simulation_controller_1 = require("./simulation.controller");
 const simulation_service_1 = require("./simulation.service");
 const factory_controller_1 = require("./factory/factory.controller");
+const presets_controller_1 = require("./factory/presets.controller");
 const factory_service_1 = require("./factory/factory.service");
 const chaos_controller_1 = require("./chaos/chaos.controller");
 const chaos_service_1 = require("./chaos/chaos.service");
@@ -74,6 +75,7 @@ exports.SimulationModule = SimulationModule = __decorate([
         controllers: [
             simulation_controller_1.SimulationController,
             factory_controller_1.FactoryController,
+            presets_controller_1.PresetsController,
             chaos_controller_1.ChaosController,
             metrics_controller_1.MetricsController,
             events_controller_1.EventsController,

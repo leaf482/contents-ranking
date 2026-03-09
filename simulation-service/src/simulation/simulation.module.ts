@@ -5,6 +5,7 @@ import * as https from 'https';
 import { SimulationController } from './simulation.controller';
 import { SimulationService } from './simulation.service';
 import { FactoryController } from './factory/factory.controller';
+import { PresetsController } from './factory/presets.controller';
 import { FactoryService } from './factory/factory.service';
 import { ChaosController } from './chaos/chaos.controller';
 import { ChaosService } from './chaos/chaos.service';
@@ -29,6 +30,7 @@ import { MetricsService } from './metrics/metrics.service';
   controllers: [
     SimulationController,
     FactoryController,
+    PresetsController,
     ChaosController,
     MetricsController,
     EventsController,

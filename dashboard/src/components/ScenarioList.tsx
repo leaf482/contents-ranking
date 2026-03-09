@@ -93,7 +93,7 @@ export function ScenarioList() {
       </h2>
       {scenarios.length === 0 ? (
         <p className="py-6 text-center text-sm text-gray-500">
-          No active scenarios. Deploy one from the builder above.
+          No active scenarios. Deploy one from the control panel above.
         </p>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

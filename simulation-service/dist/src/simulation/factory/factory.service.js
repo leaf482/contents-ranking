@@ -15,6 +15,7 @@ const master_tick_scheduler_1 = require("../engine/master-tick-scheduler");
 const scenario_registry_1 = require("../engine/scenario-registry");
 const attribution_index_1 = require("../engine/attribution-index");
 const event_log_service_1 = require("../events/event-log.service");
+const presets_constants_1 = require("./presets.constants");
 const DEFAULT_VIDEO_IDS = Array.from({ length: 10 }, (_, i) => `video${i + 1}`);
 let FactoryService = class FactoryService {
     scheduler;
@@ -29,18 +30,41 @@ let FactoryService = class FactoryService {
     }
     createAndStart(dto) {
         const scenarioId = `scenario-${Date.now().toString(36)}`;
+        let users;
+        let watchSeconds;
+        let intervalMs;
+        let durationSeconds;
+        let name;
+        if (dto.presetId) {
+            const preset = (0, presets_constants_1.getPreset)(dto.presetId);
+            if (!preset) {
+                throw new common_1.NotFoundException(`Preset '${dto.presetId}' not found`);
+            }
+            users = dto.users ?? preset.users;
+            watchSeconds = dto.watchSeconds ?? preset.watchSeconds;
+            intervalMs = dto.intervalMs ?? preset.intervalMs;
+            durationSeconds = dto.durationSeconds ?? preset.durationSeconds;
+            name = (dto.name?.trim() || preset.name);
+        }
+        else {
+            users = dto.users ?? 100;
+            watchSeconds = dto.watchSeconds ?? 30;
+            intervalMs = dto.intervalMs ?? 500;
+            durationSeconds = dto.durationSeconds;
+            name = (dto.name?.trim() || `Scenario ${Date.now().toString(36)}`);
+        }
         const videoId = dto.targetVideoId ?? DEFAULT_VIDEO_IDS[0];
         const config = {
-            users: dto.users,
+            users,
             targetVideoId: videoId,
-            watchSeconds: dto.watchSeconds ?? 30,
-            intervalMs: dto.intervalMs ?? 500,
-            durationTicks: dto.durationSeconds ? dto.durationSeconds * 10 : undefined,
+            watchSeconds,
+            intervalMs,
+            durationTicks: durationSeconds ? durationSeconds * 10 : undefined,
         };
-        this.scheduler.enqueueStart(scenarioId, dto.name, config);
+        this.scheduler.enqueueStart(scenarioId, name, config);
         return {
             id: scenarioId,
-            name: dto.name,
+            name,
             config,
             message: 'Scenario created and started',
         };

@@ -17,6 +17,14 @@ export interface MetricsSummary {
   fetchedAt: number;
   /** Event timestamps for chart annotations (last 5 min) */
   events: Array<{ type: string; scenarioId?: string; timestamp: number }>;
+  /** Worker performance metrics */
+  workerMetrics?: {
+    batchLoadAvg: number;
+    batchLoadMax: number;
+    processingTimeMs: number;
+    totalPoints: number;
+    workerStatus: 'healthy' | 'processing' | 'idle';
+  };
 }
 
 @Injectable()
@@ -34,12 +42,24 @@ export class MetricsService {
     }
 
     try {
-      const [rps, workerThroughput, consumerLag] = await Promise.all([
+      const [
+        rps,
+        workerThroughput,
+        consumerLag,
+        eventsRate,
+        batchCountRate,
+        processingSumRate,
+        totalPoints,
+      ] = await Promise.all([
         this.queryPrometheus('sum(rate(api_requests_total{path="/v1/heartbeat"}[1m]))'),
         this.queryPrometheus('sum(rate(worker_events_processed_total[1m]))'),
         this.queryPrometheus('sum(kafka_consumergroup_lag_sum)').catch(() =>
           this.queryPrometheus('sum(kafka_consumergroup_lag)'),
         ),
+        this.queryPrometheus('sum(rate(worker_events_processed_total[1m]))'),
+        this.queryPrometheus('sum(rate(worker_processing_duration_seconds_count[1m]))'),
+        this.queryPrometheus('sum(rate(worker_processing_duration_seconds_sum[1m]))'),
+        this.queryPrometheus('sum(worker_ranking_updates_total)'),
       ]);
 
       const events = this.eventLog.getEvents(5 * 60 * 1000).map((e: ScenarioEvent) => ({
@@ -48,12 +68,26 @@ export class MetricsService {
         timestamp: e.timestamp,
       }));
 
+      const batchLoadAvg = batchCountRate > 0 ? eventsRate / batchCountRate : 0;
+      const processingTimeMs =
+        batchCountRate > 0 ? (processingSumRate / batchCountRate) * 1000 : 0;
+
+      const workerStatus: 'healthy' | 'processing' | 'idle' =
+        workerThroughput > 0 ? 'processing' : rps > 0 || consumerLag > 0 ? 'idle' : 'healthy';
+
       const summary: MetricsSummary = {
         rps: Math.round(rps * 100) / 100,
         workerThroughput: Math.round(workerThroughput * 100) / 100,
         consumerLag: Math.round(consumerLag),
         fetchedAt: now,
         events,
+        workerMetrics: {
+          batchLoadAvg: Math.round(batchLoadAvg * 10) / 10,
+          batchLoadMax: 50,
+          processingTimeMs: Math.round(processingTimeMs * 10) / 10,
+          totalPoints: Math.round(totalPoints),
+          workerStatus,
+        },
       };
 
       this.cache = summary;
@@ -71,6 +105,13 @@ export class MetricsService {
           scenarioId: e.scenarioId,
           timestamp: e.timestamp,
         })),
+        workerMetrics: {
+          batchLoadAvg: 0,
+          batchLoadMax: 50,
+          processingTimeMs: 0,
+          totalPoints: 0,
+          workerStatus: 'healthy' as const,
+        },
       };
     }
   }

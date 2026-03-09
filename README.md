@@ -85,53 +85,28 @@ Real-time video ranking system based on watch heartbeats. Built with Go, Kafka, 
 
 ### Prerequisites
 
-- Docker & Docker Compose
-- Go 1.23+
-- Node.js 18+
+- **Docker Desktop** (Docker Compose included)
 
-### Install Dependencies
-
-When you clone this repository for the first time, you can install all required dependencies with a single command:
+### Run
 
 ```bash
-make deps   # Installs Go modules + simulation-service + dashboard dependencies
+git clone <repo-url>
+cd contents-ranking
+make up
 ```
 
-### Start All Services
+Wait ~30 seconds for Kafka and Redis to be ready, then open **http://localhost:3002**
 
 ```bash
-make up       # Docker + go-api + simulation + dashboard
-make down     # Stop containers
-make restart  # Restart
+make down     # Stop
+make restart # Restart
 ```
 
-Dashboard: **http://localhost:3002**
+All services (API, workers, simulation, dashboard, Kafka, Redis, Prometheus, Grafana) run in Docker. No `.env` required for the default setup.
 
-### Manual Start (Alternative)
+### Environment (Optional)
 
-```bash
-# 1. Infrastructure
-docker compose up -d kafka redis kafka-exporter redis-exporter prometheus grafana
-
-# 2. Application
-go run cmd/api/main.go                    # Terminal 1
-go run cmd/worker/main.go                 # Terminal 2 (or use Docker workers)
-cd simulation-service && npm run start:dev # Terminal 3
-cd dashboard && npm run dev                # Terminal 4
-```
-
-### Environment
-
-Copy `.env.example` to `.env`:
-
-```env
-KAFKA_BROKERS=localhost:9092
-KAFKA_TOPIC=video-heartbeats
-SERVER_PORT=8080
-REDIS_ADDR=localhost:6379
-BATCH_SIZE=50
-BATCH_FLUSH_INTERVAL=100ms
-```
+For host-mode development, copy `.env.example` to `.env`. See `.env.example` for all variables.
 
 ---
 
@@ -182,6 +157,8 @@ contents-ranking/
 ├── monitoring/
 │   └── prometheus.yml
 ├── docker-compose.yml
+├── Dockerfile.api
 ├── Dockerfile.worker
-└── Makefile
+├── Makefile
+└── .env.example
 ```

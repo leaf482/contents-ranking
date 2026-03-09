@@ -12,30 +12,68 @@ interface PipelineStep {
   status: 'active' | 'idle' | 'unknown';
 }
 
-export function PipelineStatusPanel() {
-  const { runState, refreshStatus, pauseSimulation, resumeSimulation, injectSpike } =
-    useRun();
+interface WorkerMetrics {
+  batchLoadAvg: number;
+  batchLoadMax: number;
+  processingTimeMs: number;
+  totalPoints: number;
+  workerStatus: 'healthy' | 'processing' | 'idle';
+}
+
+interface PipelineStatusPanelProps {
+  embedded?: boolean;
+}
+
+function StatCard({
+  label,
+  value,
+  unit,
+  valueColor = 'text-gray-200',
+}: {
+  label: string;
+  value: string | number;
+  unit?: string;
+  valueColor?: string;
+}) {
+  return (
+    <div className="rounded-md border border-gray-600 bg-gray-900/50 px-3 py-2">
+      <p className="text-[10px] font-medium uppercase tracking-wider text-gray-500">
+        {label}
+      </p>
+      <p className={`mt-0.5 font-mono text-sm ${valueColor}`}>
+        {value}
+        {unit && <span className="ml-0.5 text-xs text-gray-500">{unit}</span>}
+      </p>
+    </div>
+  );
+}
+
+export function PipelineStatusPanel({ embedded }: PipelineStatusPanelProps) {
+  const { runState, refreshStatus } = useRun();
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [pipelineStatus, setPipelineStatus] = useState<{
     rps: number;
     workerThroughput: number;
     lag: number;
+    workerMetrics?: WorkerMetrics;
   } | null>(null);
 
   const fetchStatus = useCallback(async () => {
     try {
       await refreshStatus();
-      const [statusRes, metricsRes] = await Promise.all([
-        fetch(`${SIMULATION_BASE}/v1/simulation/status`),
-        fetch(`${SIMULATION_BASE}/api/v1/metrics/summary`),
+      const [_, metricsJson] = await Promise.all([
+        refreshStatus(),
+        fetch(`${SIMULATION_BASE}/api/v1/metrics/summary`).then((r) =>
+          r.json().catch(() => ({}))
+        ),
       ]);
-      const statusData = await statusRes.json();
-      const metricsData = await metricsRes.json().catch(() => ({}));
+      const metricsData = metricsJson;
 
       setPipelineStatus({
         rps: metricsData.rps ?? 0,
         workerThroughput: metricsData.workerThroughput ?? 0,
         lag: metricsData.consumerLag ?? 0,
+        workerMetrics: metricsData.workerMetrics,
       });
       setLastSyncedAt(Date.now());
     } catch {
@@ -52,16 +90,63 @@ export function PipelineStatusPanel() {
       pipelineStatus.lag > 0);
 
   const steps: PipelineStep[] = [
-    { id: 'api', label: 'API', status: hasFlow && pipelineStatus!.rps > 0 ? 'active' : runState.status === 'running' ? 'idle' : 'unknown' },
-    { id: 'kafka', label: 'Kafka', status: hasFlow ? 'active' : runState.status === 'running' ? 'idle' : 'unknown' },
-    { id: 'worker', label: 'Worker', status: hasFlow && pipelineStatus!.workerThroughput > 0 ? 'active' : runState.status === 'running' ? 'idle' : 'unknown' },
-    { id: 'redis', label: 'Redis', status: hasFlow ? 'active' : runState.status === 'running' ? 'idle' : 'unknown' },
+    {
+      id: 'api',
+      label: 'API',
+      status:
+        hasFlow && pipelineStatus!.rps > 0
+          ? 'active'
+          : runState.status === 'running'
+            ? 'idle'
+            : 'unknown',
+    },
+    {
+      id: 'kafka',
+      label: 'Kafka',
+      status: hasFlow ? 'active' : runState.status === 'running' ? 'idle' : 'unknown',
+    },
+    {
+      id: 'worker',
+      label: 'Worker',
+      status:
+        hasFlow && pipelineStatus!.workerThroughput > 0
+          ? 'active'
+          : runState.status === 'running'
+            ? 'idle'
+            : 'unknown',
+    },
+    {
+      id: 'redis',
+      label: 'Redis',
+      status: hasFlow ? 'active' : runState.status === 'running' ? 'idle' : 'unknown',
+    },
   ];
 
+  const wm = pipelineStatus?.workerMetrics;
+  const statusLabel =
+    wm?.workerStatus === 'processing'
+      ? 'Processing'
+      : wm?.workerStatus === 'idle'
+        ? 'Idle'
+        : 'Healthy';
+
+  const statusColor =
+    wm?.workerStatus === 'processing'
+      ? 'text-emerald-400'
+      : wm?.workerStatus === 'idle'
+        ? 'text-amber-400'
+        : 'text-gray-400';
+
   return (
-    <div className="relative flex flex-col rounded-lg border border-gray-700 bg-gray-800/50 p-4">
+    <div
+      className={
+        embedded
+          ? 'relative flex flex-1 flex-col'
+          : 'relative flex flex-col rounded-lg border border-gray-700 bg-gray-800/50 p-4'
+      }
+    >
       <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-gray-400">
-        Pipeline Status & Chaos Panel
+        Pipeline Status
       </h2>
 
       {/* Pipeline Visualizer */}
@@ -95,34 +180,30 @@ export function PipelineStatusPanel() {
         ))}
       </div>
 
-      {/* Run info */}
-      <div className="mb-4 rounded bg-gray-900/50 p-3 font-mono text-xs text-gray-500">
-        Run: {runState.run_id || '—'} | Sent: {runState.sent} | Errors:{' '}
-        {runState.errors}
-        {runState.paused && (
-          <span className="ml-2 text-amber-400">(Paused)</span>
-        )}
-      </div>
-
-      {/* Chaos Panel */}
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="text-xs font-medium uppercase text-gray-500">
-          Chaos Injection
-        </span>
-        <button
-          onClick={runState.paused ? resumeSimulation : pauseSimulation}
-          disabled={runState.status !== 'running'}
-          className="rounded border border-amber-500/50 bg-amber-600/20 px-3 py-1.5 text-sm font-medium text-amber-400 hover:bg-amber-600/30 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {runState.paused ? 'Resume' : 'Pause'}
-        </button>
-        <button
-          onClick={injectSpike}
-          disabled={runState.status !== 'running'}
-          className="rounded border border-red-500/50 bg-red-600/20 px-3 py-1.5 text-sm font-medium text-red-400 hover:bg-red-600/30 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Spike (3k users, 5s)
-        </button>
+      {/* Worker Metrics */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <StatCard
+          label="Batch Load"
+          value={
+            wm
+              ? `${wm.batchLoadAvg} / ${wm.batchLoadMax}`
+              : '—'
+          }
+        />
+        <StatCard
+          label="Processing Time"
+          value={wm?.processingTimeMs ?? '—'}
+          unit="ms"
+        />
+        <StatCard
+          label="Total Points"
+          value={wm?.totalPoints ?? '—'}
+        />
+        <StatCard
+          label="Worker Status"
+          value={wm ? statusLabel : '—'}
+          valueColor={statusColor}
+        />
       </div>
 
       <div className="mt-2 flex justify-end">

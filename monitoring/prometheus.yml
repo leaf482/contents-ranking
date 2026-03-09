@@ -3,14 +3,12 @@ global:
   evaluation_interval: 5s
 
 scrape_configs:
-  # Go API & Worker, Simulation: run on host (not in Docker) → use host.docker.internal
   - job_name: go-api
     static_configs:
-      - targets: ['host.docker.internal:8080']
+      - targets: ['go-api:8080']
 
   - job_name: go-worker
     static_configs:
-      # Docker-scaled workers (no host port binding)
       - targets:
           - contents-ranking-go-worker-1:8081
           - contents-ranking-go-worker-2:8081
@@ -18,7 +16,7 @@ scrape_configs:
 
   - job_name: simulation-service
     static_configs:
-      - targets: ['host.docker.internal:3000']
+      - targets: ['simulation-service:3000']
 
   # Exporters: run in Docker on same network
   - job_name: kafka-exporter

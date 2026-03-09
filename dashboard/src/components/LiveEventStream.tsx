@@ -11,10 +11,14 @@ interface StreamEvent {
   timestamp: number;
 }
 
-const MAX_EVENTS = 10;
+interface LiveEventStreamProps {
+  embedded?: boolean;
+}
+
+const MAX_EVENTS = 20;
 const POLL_MS = 250;
 
-export function LiveEventStream() {
+export function LiveEventStream({ embedded }: LiveEventStreamProps) {
   const [events, setEvents] = useState<StreamEvent[]>([]);
 
   const fetchEvents = useCallback(async () => {
@@ -34,12 +38,20 @@ export function LiveEventStream() {
     return () => clearInterval(id);
   }, [fetchEvents]);
 
+  const containerClass = embedded
+    ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+    : 'rounded-lg border border-gray-700 bg-gray-800/80 p-3 shadow-lg';
+
+  const listClass = embedded
+    ? 'min-h-0 flex-1 overflow-y-auto overflow-x-hidden'
+    : 'max-h-[200px] min-h-[80px] overflow-hidden';
+
   return (
-    <div className="rounded-lg border border-gray-700 bg-gray-800/80 p-3 shadow-lg">
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
+    <div className={containerClass}>
+      <h3 className="mb-2 shrink-0 text-xs font-semibold uppercase tracking-wide text-gray-400">
         Live Event Stream
       </h3>
-      <div className="max-h-[200px] min-h-[80px] overflow-hidden">
+      <div className={listClass}>
         <AnimatePresence mode="popLayout" initial={false}>
           {events.length === 0 ? (
             <motion.p
@@ -58,7 +70,7 @@ export function LiveEventStream() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -12 }}
                 transition={{ duration: 0.25 }}
-                className="mb-1.5 text-xs font-mono text-gray-300"
+                className="mb-1.5 text-xs font-mono text-gray-400"
               >
                 User {e.userId} → {getVideoTitle(e.videoId)} (+1)
               </motion.div>

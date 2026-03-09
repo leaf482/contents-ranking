@@ -1,7 +1,8 @@
 import { FactoryService } from './factory.service';
 export interface CreateScenarioDto {
-    name: string;
-    users: number;
+    name?: string;
+    presetId?: string;
+    users?: number;
     targetVideoId?: string;
     watchSeconds?: number;
     intervalMs?: number;

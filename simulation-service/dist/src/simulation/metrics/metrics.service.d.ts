@@ -9,6 +9,13 @@ export interface MetricsSummary {
         scenarioId?: string;
         timestamp: number;
     }>;
+    workerMetrics?: {
+        batchLoadAvg: number;
+        batchLoadMax: number;
+        processingTimeMs: number;
+        totalPoints: number;
+        workerStatus: 'healthy' | 'processing' | 'idle';
+    };
 }
 export declare class MetricsService {
     private readonly eventLog;

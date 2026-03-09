@@ -161,7 +161,8 @@ export class MasterTickScheduler implements OnModuleDestroy {
   }
 
   private buildPayloads(scenario: Scenario, count: number): HeartbeatPayload[] {
-    const { targetVideoId, watchSeconds } = scenario.config;
+    const { targetVideoId, watchSeconds, intervalMs } = scenario.config;
+    const maxPlayheadMs = watchSeconds * 1000;
     const prefix = `${scenario.id}-`;
     const payloads: HeartbeatPayload[] = [];
     const now = Date.now();
@@ -170,7 +171,12 @@ export class MasterTickScheduler implements OnModuleDestroy {
       const userIdx = i % scenario.activeUsers;
       const userId = `${prefix}user-${userIdx + 1}`;
       const prev = scenario.playheads.get(userId) ?? 0;
-      const next = prev + watchSeconds * 1000;
+
+      // User has reached total watch time - stop sending events (1x real-time sync)
+      if (prev >= maxPlayheadMs) continue;
+
+      // 1x speed: playhead advances by actual elapsed time (intervalMs between heartbeats)
+      const next = Math.min(prev + intervalMs, maxPlayheadMs);
       scenario.playheads.set(userId, next);
 
       payloads.push({
