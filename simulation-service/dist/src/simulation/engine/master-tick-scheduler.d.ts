@@ -1,0 +1,31 @@
+import { OnModuleDestroy } from '@nestjs/common';
+import { SimulationScenario } from '../interfaces/scenario.interface';
+import { RunManager } from './run-manager';
+import { TaskManager } from './task-manager';
+export declare class MasterTickScheduler implements OnModuleDestroy {
+    private readonly taskManager;
+    private readonly runManager;
+    private readonly logger;
+    private intervalId;
+    private playheads;
+    private elapsedTicks;
+    private activeUsers;
+    private usersPerRampTick;
+    private stopped;
+    private paused;
+    private spikeOverlayUsers;
+    private spikeOverlayEndMs;
+    constructor(taskManager: TaskManager, runManager: RunManager);
+    onModuleDestroy(): void;
+    start(): void;
+    stop(): void;
+    beginRun(scenario: SimulationScenario): void;
+    endRun(): void;
+    switchPhase(scenario: SimulationScenario): void;
+    setPaused(p: boolean): void;
+    isPaused(): boolean;
+    injectSpikeOverlay(users?: number, durationSec?: number): void;
+    private getActiveUsers;
+    private getElapsedTicks;
+    private tick;
+}
