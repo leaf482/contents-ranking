@@ -89,12 +89,20 @@ Real-time video ranking system based on watch heartbeats. Built with Go, Kafka, 
 - Go 1.23+
 - Node.js 18+
 
+### Install Dependencies
+
+When you clone this repository for the first time, you can install all required dependencies with a single command:
+
+```bash
+make deps   # Installs Go modules + simulation-service + dashboard dependencies
+```
+
 ### Start All Services
 
 ```bash
-make up      # Docker + go-api + simulation + dashboard
-make down    # Stop containers
-make restart # Restart
+make up       # Docker + go-api + simulation + dashboard
+make down     # Stop containers
+make restart  # Restart
 ```
 
 Dashboard: **http://localhost:3002**

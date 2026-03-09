@@ -1,7 +1,7 @@
 # Contents Ranking - System Automation Makefile
 # Compatible with Mac, Linux, and Windows (Git Bash / PowerShell)
 
-.PHONY: up down restart logs status clean help
+.PHONY: up down restart logs status clean help deps
 
 # Cross-platform sleep (Windows: PowerShell, Mac/Linux: sleep)
 ifeq ($(OS),Windows_NT)
@@ -15,6 +15,7 @@ endif
 # Default target
 help:
 	@echo "Contents Ranking - Available targets:"
+	@echo "  make deps     - Install all project dependencies (Go + Node)"
 	@echo "  make up       - Start all services + dashboard"
 	@echo "  make down     - Stop and remove all containers"
 	@echo "  make restart  - down + up"
@@ -23,6 +24,15 @@ help:
 	@echo "  make clean    - Remove volumes and unused images"
 	@echo ""
 	@echo "'make up' starts: Docker, go-api (:8080), simulation-service (:3000), dashboard (:3002)"
+
+deps:
+	@echo "==> [1/3] Installing Go module dependencies..."
+	@go mod download
+	@echo "==> [2/3] Installing simulation-service npm dependencies..."
+	@cd simulation-service && npm install
+	@echo "==> [3/3] Installing dashboard npm dependencies..."
+	@cd dashboard && npm install
+	@echo "==> Done. All dependencies installed."
 
 up:
 	@echo "==> [1/5] Starting Docker services (go-worker x3)..."
