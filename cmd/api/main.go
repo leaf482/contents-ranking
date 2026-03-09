@@ -6,12 +6,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"contents-ranking/internal/config"
 	"contents-ranking/internal/handler"
 	"contents-ranking/internal/kafka"
+	"contents-ranking/internal/metrics"
 	redispkg "contents-ranking/internal/redis"
 	"contents-ranking/internal/repository"
 )
@@ -39,8 +43,9 @@ func main() {
 	rh := handler.NewRankingHandler(repository.NewRankingRepo(rdb))
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/heartbeat", h.HandleHeartbeat)
-	mux.HandleFunc("/v1/ranking", rh.HandleGetRanking)
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/v1/heartbeat", instrument("/v1/heartbeat", h.HandleHeartbeat))
+	mux.HandleFunc("/v1/ranking", instrument("/v1/ranking", rh.HandleGetRanking))
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.ServerPort,
@@ -72,4 +77,28 @@ func main() {
 	}
 
 	log.Println("api: shutdown complete")
+}
+
+// instrument wraps a HandlerFunc to record request count and latency.
+func instrument(path string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next(rw, r)
+		metrics.APIRequestDuration.WithLabelValues(r.Method, path).
+			Observe(time.Since(start).Seconds())
+		metrics.APIRequestsTotal.WithLabelValues(r.Method, path, strconv.Itoa(rw.status)).
+			Inc()
+	}
+}
+
+// statusWriter captures the HTTP status code written by a handler.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (sw *statusWriter) WriteHeader(code int) {
+	sw.status = code
+	sw.ResponseWriter.WriteHeader(code)
 }

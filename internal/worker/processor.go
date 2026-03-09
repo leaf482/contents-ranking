@@ -10,6 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
 
+	"contents-ranking/internal/metrics"
 	"contents-ranking/internal/models"
 )
 
@@ -73,8 +74,11 @@ func NewProcessor(rdb *redis.Client) *Processor {
 }
 
 func (p *Processor) Process(ctx context.Context, msg kafka.Message) error {
+	start := time.Now()
+
 	var event models.HeartbeatEvent
 	if err := json.Unmarshal(msg.Value, &event); err != nil {
+		metrics.WorkerEventsProcessedTotal.WithLabelValues("error").Inc()
 		return fmt.Errorf("unmarshal: %w", err)
 	}
 
@@ -92,11 +96,16 @@ func (p *Processor) Process(ctx context.Context, msg kafka.Message) error {
 		int(sessionTTL.Seconds()),
 	).Int()
 	if err != nil {
+		metrics.WorkerEventsProcessedTotal.WithLabelValues("error").Inc()
 		return fmt.Errorf("lua rankScript (session=%s video=%s): %w",
 			event.SessionID, event.VideoID, err)
 	}
 
+	metrics.WorkerEventsProcessedTotal.WithLabelValues("success").Inc()
+	metrics.WorkerProcessingDuration.Observe(time.Since(start).Seconds())
+
 	if result == 1 {
+		metrics.WorkerRankingUpdatesTotal.Inc()
 		log.Printf("[RANKING UPDATED] VideoID: %s, UserID: %s",
 			event.VideoID, event.UserID)
 	}

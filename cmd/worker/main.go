@@ -3,19 +3,36 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"contents-ranking/internal/config"
 	redispkg "contents-ranking/internal/redis"
 	"contents-ranking/internal/worker"
 )
 
-const consumerGroupID = "contents-ranking-worker"
+const (
+	consumerGroupID = "contents-ranking-worker"
+	metricsAddr     = ":8081"
+)
 
 func main() {
 	cfg := config.LoadConfig()
+
+	// Metrics server — runs independently so shutdown of the worker
+	// loop doesn't block scraping in-flight.
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		log.Printf("worker: metrics server listening on %s", metricsAddr)
+		if err := http.ListenAndServe(metricsAddr, mux); err != nil {
+			log.Printf("worker: metrics server error: %v", err)
+		}
+	}()
 
 	rdb, err := redispkg.NewClient(cfg.RedisAddr)
 	if err != nil {
