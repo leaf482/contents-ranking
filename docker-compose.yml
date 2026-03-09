@@ -11,12 +11,13 @@ services:
     container_name: kafka-kraft
     ports:
       - "9092:9092"
+      - "29092:29092"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_DOCKER://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_DOCKER://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_DOCKER:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: "1@localhost:9093"
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
@@ -50,7 +51,7 @@ services:
     ports:
       - "9308:9308"
     command:
-      - "--kafka.server=kafka:9092"
+      - "--kafka.server=kafka:29092"
     networks:
       - contents-ranking-net
     depends_on:
@@ -78,7 +79,7 @@ services:
       context: .
       dockerfile: Dockerfile.worker
     environment:
-      KAFKA_BROKERS: kafka:9092
+      KAFKA_BROKERS: kafka:29092
       KAFKA_TOPIC: video-heartbeats
       REDIS_ADDR: redis:6379
       SERVER_PORT: "8081"
