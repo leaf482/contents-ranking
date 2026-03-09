@@ -1,0 +1,11 @@
+.git
+.github
+*.md
+.env
+.env.*
+simulation-service
+monitoring
+*.txt
+dist
+coverage
+node_modules

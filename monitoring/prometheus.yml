@@ -10,7 +10,11 @@ scrape_configs:
 
   - job_name: go-worker
     static_configs:
-      - targets: ['host.docker.internal:8081']
+      # Docker-scaled workers (no host port binding)
+      - targets:
+          - contents-ranking-go-worker-1:8081
+          - contents-ranking-go-worker-2:8081
+          - contents-ranking-go-worker-3:8081
 
   - job_name: simulation-service
     static_configs:

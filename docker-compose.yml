@@ -71,6 +71,28 @@ services:
       redis:
         condition: service_healthy
 
+  # ── Application Workers ──────────────────────────────────────────
+
+  go-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: video-heartbeats
+      REDIS_ADDR: redis:6379
+      SERVER_PORT: "8081"
+      BATCH_SIZE: "50"
+      BATCH_FLUSH_INTERVAL: "100ms"
+    networks:
+      - contents-ranking-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # No host port binding — metrics (8081) internal only for Prometheus
+
   # ── Observability ────────────────────────────────────────────────────────────
 
   prometheus:

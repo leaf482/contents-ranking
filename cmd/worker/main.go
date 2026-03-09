@@ -47,7 +47,7 @@ func main() {
 	log.Printf("worker: connected to Redis at %s", cfg.RedisAddr)
 
 	processor := worker.NewProcessor(rdb)
-	w := worker.New(cfg.KafkaBrokers, cfg.KafkaTopic, consumerGroupID, processor)
+	w := worker.New(cfg.KafkaBrokers, cfg.KafkaTopic, consumerGroupID, processor, cfg.BatchSize, cfg.BatchFlushInterval)
 	defer func() {
 		if cerr := w.Close(); cerr != nil {
 			log.Printf("worker: kafka reader close error: %v", cerr)
