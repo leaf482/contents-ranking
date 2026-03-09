@@ -12,6 +12,8 @@ import (
 	"contents-ranking/internal/config"
 	"contents-ranking/internal/handler"
 	"contents-ranking/internal/kafka"
+	redispkg "contents-ranking/internal/redis"
+	"contents-ranking/internal/repository"
 )
 
 func main() {
@@ -23,10 +25,22 @@ func main() {
 
 	producer := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic)
 
+	rdb, err := redispkg.NewClient(cfg.RedisAddr)
+	if err != nil {
+		log.Fatalf("startup: redis connection failed: %v", err)
+	}
+	defer func() {
+		if cerr := rdb.Close(); cerr != nil {
+			log.Printf("api: redis close error: %v", cerr)
+		}
+	}()
+
 	h := handler.NewHandler(producer)
+	rh := handler.NewRankingHandler(repository.NewRankingRepo(rdb))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/heartbeat", h.HandleHeartbeat)
+	mux.HandleFunc("/v1/ranking", rh.HandleGetRanking)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.ServerPort,
