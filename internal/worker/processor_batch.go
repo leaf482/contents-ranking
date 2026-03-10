@@ -29,6 +29,9 @@ var rankBatchScript = redis.NewScript(`
 local ranking_key = KEYS[1]
 local total_ranked = 0
 local n = #KEYS - 1
+local now_parts = redis.call('TIME')
+local now_ms = now_parts[1] * 1000 + math.floor(now_parts[2] / 1000)
+local window_ms = ` + fmt.Sprint(velocityWindowSec*1000) + `
 
 -- Debug copies for the last processed event
 local debug_delta = 0
@@ -66,9 +69,6 @@ for i = 1, n do
             accum = accum - thresh
             ranked = ranked + 1
             -- Trending velocity tracking
-            local now_parts = redis.call('TIME')
-            local now_ms = now_parts[1] * 1000 + math.floor(now_parts[2] / 1000)
-            local window_ms = ` + fmt.Sprint(velocityWindowSec*1000) + `
             local velocity_key = 'ranking:velocity:' .. video_id
             local trending_key = 'ranking:trending'
 

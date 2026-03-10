@@ -45,6 +45,9 @@ local cur    = tonumber(ARGV[2])
 local gap    = tonumber(ARGV[3])
 local thresh = tonumber(ARGV[4])
 local ttl    = tonumber(ARGV[5])
+local now_parts = redis.call('TIME')
+local now_ms = now_parts[1] * 1000 + math.floor(now_parts[2] / 1000)
+local window_ms = ` + fmt.Sprint(velocityWindowSec*1000) + `
 
 local delta = cur - last
 local ranked = 0
@@ -68,9 +71,6 @@ if delta > 0 then
         ranked = ranked + 1
 
         -- Trending velocity tracking
-        local now_parts = redis.call('TIME')
-        local now_ms = now_parts[1] * 1000 + math.floor(now_parts[2] / 1000)
-        local window_ms = ` + fmt.Sprint(velocityWindowSec*1000) + `
         local velocity_key = 'ranking:velocity:' .. ARGV[1]
         local trending_key = 'ranking:trending'
 
