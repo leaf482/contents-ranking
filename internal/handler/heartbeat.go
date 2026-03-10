@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -28,6 +29,24 @@ func debugLog(format string, args ...interface{}) {
 	}
 }
 
+// validateHeartbeat checks required fields and returns an error message if invalid.
+// Invalid events are rejected before publishing to Kafka.
+func validateHeartbeat(e *models.HeartbeatEvent) string {
+	if strings.TrimSpace(e.SessionID) == "" {
+		return "session_id is required and must not be empty"
+	}
+	if strings.TrimSpace(e.VideoID) == "" {
+		return "video_id is required and must not be empty"
+	}
+	if e.Playhead < 0 {
+		return "playhead must be non-negative"
+	}
+	if e.Timestamp < 0 {
+		return "timestamp must be non-negative when provided"
+	}
+	return ""
+}
+
 func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	debugLog("HandleHeartbeat entered")
 	defer debugLog("HandleHeartbeat exited")
@@ -44,11 +63,11 @@ func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Basic validation to prevent invalid events from entering the pipeline.
-	if event.VideoID == "" || event.SessionID == "" || event.Playhead < 0 || event.Timestamp == 0 {
-		log.Printf("handler: invalid heartbeat payload session=%s video=%s playhead=%d timestamp=%d",
-			event.SessionID, event.VideoID, event.Playhead, event.Timestamp)
-		http.Error(w, "invalid heartbeat payload", http.StatusBadRequest)
+	// Validation: reject malformed events before publishing to Kafka.
+	if errMsg := validateHeartbeat(&event); errMsg != "" {
+		log.Printf("handler: validation failed session=%s video=%s playhead=%d timestamp=%d: %s",
+			event.SessionID, event.VideoID, event.Playhead, event.Timestamp, errMsg)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
