@@ -385,9 +385,13 @@ export class MasterTickScheduler implements OnModuleDestroy {
 
       // 1) Generate new users (base traffic + injection) on 1-second boundaries (10 ticks).
       if (scenario.elapsedTicks % 10 === 0) {
-        const arrivals = this.generateArrivals(scenario, nowMs);
-        for (const sess of arrivals) {
-          scenario.sessions.set(sess.userId, sess);
+        const maxSessions = scenario.config.maxConcurrentSessions ?? 20_000;
+        if (scenario.sessions.size < maxSessions) {
+          const arrivals = this.generateArrivals(scenario, nowMs);
+          for (const sess of arrivals) {
+            if (scenario.sessions.size >= maxSessions) break;
+            scenario.sessions.set(sess.userId, sess);
+          }
         }
       }
 

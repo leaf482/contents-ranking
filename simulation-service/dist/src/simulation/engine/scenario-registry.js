@@ -4,6 +4,7 @@ exports.ScenarioRegistry = void 0;
 function normalizeScenarioConfig(config) {
     return {
         heartbeatIntervalMs: config.heartbeatIntervalMs ?? 500,
+        maxConcurrentSessions: config.maxConcurrentSessions ?? 20_000,
         ...config,
     };
 }

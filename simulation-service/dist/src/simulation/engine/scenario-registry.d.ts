@@ -1,6 +1,7 @@
 export type ScenarioStatus = 'running' | 'paused' | 'stopped';
 export interface ScenarioConfig {
     heartbeatIntervalMs?: number;
+    maxConcurrentSessions?: number;
     baseTraffic?: {
         lambdaUsersPerSecond: number;
     };

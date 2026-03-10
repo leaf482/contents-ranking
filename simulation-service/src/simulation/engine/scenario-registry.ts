@@ -13,6 +13,12 @@ export interface ScenarioConfig {
   heartbeatIntervalMs?: number;
 
   /**
+   * Guardrail to prevent session explosion.
+   * If omitted, defaults to 20,000 concurrent sessions per scenario.
+   */
+  maxConcurrentSessions?: number;
+
+  /**
    * Base traffic model (continuous arrivals).
    * Each second we sample usersPerSecond ~ Poisson(lambdaUsersPerSecond).
    */
@@ -55,8 +61,9 @@ export interface ScenarioConfig {
 
 function normalizeScenarioConfig(config: ScenarioConfig): ScenarioConfig {
   return {
-    heartbeatIntervalMs: config.heartbeatIntervalMs ?? 500,
     ...config,
+    heartbeatIntervalMs: config.heartbeatIntervalMs ?? 500,
+    maxConcurrentSessions: config.maxConcurrentSessions ?? 20_000,
   };
 }
 
