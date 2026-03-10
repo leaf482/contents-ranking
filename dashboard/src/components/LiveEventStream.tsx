@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SIMULATION_BASE } from '@/lib/config';
 import { getVideoTitle } from '@/lib/videos';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -15,22 +15,25 @@ interface LiveEventStreamProps {
   embedded?: boolean;
 }
 
-const MAX_EVENTS = 20;
+const MAX_EVENTS_EMBEDDED = 20;
+const MAX_EVENTS_FULL = 200;
 const POLL_MS = 250;
 
 export function LiveEventStream({ embedded }: LiveEventStreamProps) {
   const [events, setEvents] = useState<StreamEvent[]>([]);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const maxEvents = embedded ? MAX_EVENTS_EMBEDDED : MAX_EVENTS_FULL;
 
   const fetchEvents = useCallback(async () => {
     try {
       const res = await fetch(`${SIMULATION_BASE}/v1/events/stream`);
       const json = await res.json();
       const list = Array.isArray(json.events) ? json.events : [];
-      setEvents(list.slice(0, MAX_EVENTS));
+      setEvents(list.slice(0, maxEvents));
     } catch {
       setEvents([]);
     }
-  }, []);
+  }, [maxEvents]);
 
   useEffect(() => {
     fetchEvents();
@@ -44,14 +47,24 @@ export function LiveEventStream({ embedded }: LiveEventStreamProps) {
 
   const listClass = embedded
     ? 'min-h-0 flex-1 overflow-y-auto overflow-x-hidden'
-    : 'max-h-[200px] min-h-[80px] overflow-hidden';
+    : 'h-[280px] min-h-[200px] overflow-y-auto overflow-x-hidden';
+
+  const renderedEvents = useMemo(() => [...events].reverse(), [events]);
+
+  // Keep latest events visible in full console view.
+  useEffect(() => {
+    if (embedded) return;
+    const el = listRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [embedded, renderedEvents]);
 
   return (
     <div className={containerClass}>
       <h3 className="mb-2 shrink-0 text-xs font-semibold uppercase tracking-wide text-gray-400">
-        Live Event Stream
+        {embedded ? 'Live Event Stream' : 'LIVE EVENT STREAM'}
       </h3>
-      <div className={listClass}>
+      <div ref={listRef} className={listClass}>
         <AnimatePresence mode="popLayout" initial={false}>
           {events.length === 0 ? (
             <motion.p
@@ -63,7 +76,7 @@ export function LiveEventStream({ embedded }: LiveEventStreamProps) {
               No events yet
             </motion.p>
           ) : (
-            [...events].reverse().map((e, i) => (
+            renderedEvents.map((e, i) => (
               <motion.div
                 key={`${e.timestamp}-${e.userId}-${e.videoId}-${i}`}
                 initial={{ opacity: 0, y: 12 }}
@@ -72,6 +85,9 @@ export function LiveEventStream({ embedded }: LiveEventStreamProps) {
                 transition={{ duration: 0.25 }}
                 className="mb-1.5 text-xs font-mono text-gray-400"
               >
+                <span className="text-gray-500">
+                  {new Date(e.timestamp).toLocaleTimeString()}
+                </span>{' '}
                 User {e.userId} → {getVideoTitle(e.videoId)} (+1)
               </motion.div>
             ))

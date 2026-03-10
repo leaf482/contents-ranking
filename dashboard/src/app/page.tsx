@@ -8,6 +8,7 @@ import { MetricsPanel } from '@/components/MetricsPanel';
 import { RankingPanel } from '@/components/RankingPanel';
 import { PipelineStatusPanel } from '@/components/PipelineStatusPanel';
 import { LiveEventStream } from '@/components/LiveEventStream';
+import { VelocityPanel } from '@/components/VelocityPanel';
 
 export default function DashboardPage() {
   return (
@@ -29,21 +30,28 @@ export default function DashboardPage() {
             <ScenarioList />
           </section>
 
-          {/* Metrics + Pipeline (left) | Ranking (right, fixed height) */}
-          <section className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_500px] lg:grid-rows-[auto_1fr]">
+          {/* Metrics (left, narrower) | Velocity (right) */}
+          <section className="grid grid-cols-1 gap-6 lg:grid-cols-[3fr_2fr]">
             <div className="min-h-[280px]">
               <MetricsPanel />
             </div>
-            <div className="grid min-h-[240px] grid-cols-2 divide-x divide-gray-600 overflow-hidden rounded-lg border border-gray-700 bg-gray-800/50">
-              <div className="flex flex-col p-4">
-                <PipelineStatusPanel embedded />
-              </div>
-              <div className="flex min-h-0 flex-col overflow-hidden p-4">
-                <LiveEventStream embedded />
-              </div>
+            <div className="min-h-[280px]">
+              <VelocityPanel />
             </div>
-            <div className="lg:col-start-2 lg:row-start-1 lg:row-span-2 h-[600px] shrink-0">
-              <RankingPanel />
+          </section>
+
+          {/* Ranking (global + trending) */}
+          <section className="h-[640px]">
+            <RankingPanel />
+          </section>
+
+          {/* Bottom: Pipeline Status (left) | Live Event Stream (right) */}
+          <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
+              <PipelineStatusPanel />
+            </div>
+            <div className="rounded-lg border border-gray-700 bg-gray-900/30 p-4">
+              <LiveEventStream />
             </div>
           </section>
         </div>
