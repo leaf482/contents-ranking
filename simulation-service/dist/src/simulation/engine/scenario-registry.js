@@ -1,6 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ScenarioRegistry = void 0;
+function normalizeScenarioConfig(config) {
+    return {
+        heartbeatIntervalMs: config.heartbeatIntervalMs ?? 500,
+        ...config,
+    };
+}
 const DEFAULT_VIDEO_IDS = [
     'MrBeast Challenge',
     'Street Interview',
@@ -104,7 +110,7 @@ class ScenarioRegistry {
             id: t.id,
             name: t.name,
             status: 'running',
-            config: { ...t.config },
+            config: normalizeScenarioConfig({ ...t.config }),
             stats: { emittedEvents: 0 },
             elapsedTicks: 0,
             activeUsers: 0,
@@ -121,7 +127,7 @@ class ScenarioRegistry {
             id,
             name,
             status: 'running',
-            config: { ...config },
+            config: normalizeScenarioConfig({ ...config }),
             stats: { emittedEvents: 0 },
             elapsedTicks: 0,
             activeUsers: 0,
@@ -156,7 +162,7 @@ class ScenarioRegistry {
     updateConfig(id, config) {
         const s = this.scenarios.get(id);
         if (s) {
-            s.config = { ...s.config, ...config };
+            s.config = normalizeScenarioConfig({ ...s.config, ...config });
             s.elapsedTicks = 0;
             s.activeUsers = 0;
             s.startedAtMs = Date.now();

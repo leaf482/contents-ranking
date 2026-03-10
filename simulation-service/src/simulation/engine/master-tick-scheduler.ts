@@ -233,6 +233,7 @@ export class MasterTickScheduler implements OnModuleDestroy {
           videoId,
           watchDurationMs,
           nowMs,
+          heartbeatIntervalMs: scenario.config.heartbeatIntervalMs ?? 500,
           sessionPrefix: 'sim',
         }),
       );

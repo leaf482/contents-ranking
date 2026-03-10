@@ -13,6 +13,7 @@ export interface NewSessionInput {
     videoId: string;
     watchDurationMs: number;
     nowMs: number;
+    heartbeatIntervalMs: number;
     sessionPrefix?: string;
 }
 export declare function createUserSession(input: NewSessionInput): UserSession;

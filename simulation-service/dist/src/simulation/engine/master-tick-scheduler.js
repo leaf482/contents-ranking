@@ -191,6 +191,7 @@ let MasterTickScheduler = MasterTickScheduler_1 = class MasterTickScheduler {
                 videoId,
                 watchDurationMs,
                 nowMs,
+                heartbeatIntervalMs: scenario.config.heartbeatIntervalMs ?? 500,
                 sessionPrefix: 'sim',
             }));
         }

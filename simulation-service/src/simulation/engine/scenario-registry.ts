@@ -7,6 +7,12 @@ export type ScenarioStatus = 'running' | 'paused' | 'stopped';
 
 export interface ScenarioConfig {
   /**
+   * Heartbeat cadence per active user session.
+   * If omitted, defaults to 500ms.
+   */
+  heartbeatIntervalMs?: number;
+
+  /**
    * Base traffic model (continuous arrivals).
    * Each second we sample usersPerSecond ~ Poisson(lambdaUsersPerSecond).
    */
@@ -45,6 +51,13 @@ export interface ScenarioConfig {
 
   /** Optional duration in ticks (100ms each). When reached, scenario stops. */
   durationTicks?: number;
+}
+
+function normalizeScenarioConfig(config: ScenarioConfig): ScenarioConfig {
+  return {
+    heartbeatIntervalMs: config.heartbeatIntervalMs ?? 500,
+    ...config,
+  };
 }
 
 export interface ScenarioStats {
@@ -190,7 +203,7 @@ export class ScenarioRegistry {
       id: t.id,
       name: t.name,
       status: 'running',
-      config: { ...t.config },
+      config: normalizeScenarioConfig({ ...t.config }),
       stats: { emittedEvents: 0 },
       elapsedTicks: 0,
       activeUsers: 0,
@@ -208,7 +221,7 @@ export class ScenarioRegistry {
       id,
       name,
       status: 'running',
-      config: { ...config },
+      config: normalizeScenarioConfig({ ...config }),
       stats: { emittedEvents: 0 },
       elapsedTicks: 0,
       activeUsers: 0,
@@ -249,7 +262,7 @@ export class ScenarioRegistry {
   updateConfig(id: string, config: Partial<ScenarioConfig>): void {
     const s = this.scenarios.get(id);
     if (s) {
-      s.config = { ...s.config, ...config };
+      s.config = normalizeScenarioConfig({ ...s.config, ...config });
       s.elapsedTicks = 0;
       s.activeUsers = 0;
       s.startedAtMs = Date.now();
