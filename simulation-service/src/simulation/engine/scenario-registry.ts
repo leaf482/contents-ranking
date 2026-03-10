@@ -51,7 +51,18 @@ export interface ScenarioTemplate {
   duration_seconds?: number;
 }
 
-const DEFAULT_VIDEO_IDS = Array.from({ length: 10 }, (_, i) => `video${i + 1}`);
+const DEFAULT_VIDEO_IDS = [
+  'MrBeast Challenge',
+  'Street Interview',
+  "Life Hack: Don't",
+  'GRWM for Prom',
+  'Golden Retriever',
+  'Restocking My Fridge',
+  'Day in my Life',
+  "POV: You're Late",
+  'I Won 10,000$',
+  'Is it Cake?',
+];
 
 const TEMPLATES: Record<string, ScenarioTemplate> = {
   normal: {

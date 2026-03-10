@@ -88,7 +88,7 @@ func (w *Worker) Run(ctx context.Context) {
 		ticker := time.NewTicker(w.flushInt)
 		defer ticker.Stop()
 
-		flush := func() {
+		flush := func(ctx context.Context) {
 			if len(batch) == 0 {
 				return
 			}
@@ -104,37 +104,39 @@ func (w *Worker) Run(ctx context.Context) {
 			if err := w.reader.CommitMessages(ctx, toProcess...); err != nil {
 				log.Printf("worker: batch commit error: %v", err)
 			}
-			debugLog("flushed batch_size=%d ranked=%d", len(toProcess), ranked)
+			log.Printf("worker: processed batch size=%d ranked=%d", len(toProcess), ranked)
 		}
 
-		drainAndFlush := func() {
+		drainAndFlush := func(ctx context.Context) {
 			for msg := range msgCh {
 				batch = append(batch, msg)
 				if len(batch) >= w.batchSize {
-					flush()
+					flush(ctx)
 				}
 			}
-			flush()
+			flush(ctx)
 		}
 
 		for {
 			select {
 			case <-ctx.Done():
-				drainAndFlush()
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				drainAndFlush(shutdownCtx)
 				log.Println("worker: batcher shutdown, flushed remaining")
 				return
 			case msg, ok := <-msgCh:
 				if !ok {
-					flush()
+					flush(ctx)
 					return
 				}
 				batch = append(batch, msg)
 				if len(batch) >= w.batchSize {
-					flush()
+					flush(ctx)
 					ticker.Reset(w.flushInt)
 				}
 			case <-ticker.C:
-				flush()
+				flush(ctx)
 			}
 		}
 	}()

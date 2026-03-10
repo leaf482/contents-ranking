@@ -27,7 +27,15 @@ func main() {
 		log.Fatalf("startup: kafka topic check failed: %v", err)
 	}
 
-	producer := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic)
+	// Buffered Kafka producer: API enqueues heartbeats to an in-memory buffer,
+	// and a background worker flushes batches to Kafka.
+	producer := kafka.NewBufferedProducer(
+		cfg.KafkaBrokers,
+		cfg.KafkaTopic,
+		10_000,           // queue size
+		100,              // max batch size
+		5*time.Millisecond, // linger time
+	)
 
 	rdb, err := redispkg.NewClient(cfg.RedisAddr)
 	if err != nil {
@@ -53,6 +61,7 @@ func main() {
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/v1/heartbeat", instrument("/v1/heartbeat", h.HandleHeartbeat))
 	mux.HandleFunc("/v1/ranking", instrument("/v1/ranking", rh.HandleGetRanking))
+	mux.HandleFunc("/v1/trending", instrument("/v1/trending", rh.HandleGetTrending))
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.ServerPort,

@@ -42,8 +42,9 @@ func (c *rankingCache) set(data []models.RankingItem) {
 }
 
 type RankingHandler struct {
-	repo  *repository.RankingRepo
-	cache rankingCache
+	repo          *repository.RankingRepo
+	cache         rankingCache
+	trendingCache rankingCache
 }
 
 func NewRankingHandler(repo *repository.RankingRepo) *RankingHandler {
@@ -87,6 +88,46 @@ func (h *RankingHandler) HandleGetRanking(w http.ResponseWriter, r *http.Request
 	}
 
 	h.cache.set(items)
+	h.writeJSON(w, slice(items, limit))
+}
+
+// HandleGetTrending returns the top videos by velocity score over the last
+// sliding window (60s), highest first. Separate cache from main ranking.
+func (h *RankingHandler) HandleGetTrending(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	limit := int64(defaultLimit)
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || n <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if n > maxLimit {
+			n = maxLimit
+		}
+		limit = n
+	}
+
+	if full, ok := h.trendingCache.get(); ok {
+		h.writeJSON(w, slice(full, limit))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	items, err := h.repo.GetTopTrending(ctx, maxLimit)
+	if err != nil {
+		log.Printf("handler: GetTopTrending error: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	h.trendingCache.set(items)
 	h.writeJSON(w, slice(items, limit))
 }
 

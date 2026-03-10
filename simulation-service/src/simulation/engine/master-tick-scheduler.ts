@@ -104,8 +104,12 @@ export class MasterTickScheduler implements OnModuleDestroy {
             }
             this.attributionIndex.setScenarioVideo(cmd.scenarioId, cmd.config.targetVideoId);
             this.eventLog.record('start', cmd.scenarioId);
+            const durationSeconds = cmd.config.durationTicks
+              ? (cmd.config.durationTicks * TICK_MS) / 1000
+              : undefined;
             this.logger.log(
-              `started ${cmd.scenarioId} (${cmd.config.users} users)${cmd.initialStatus === 'paused' ? ' [paused]' : ''}`,
+              `scenario started id=${cmd.scenarioId} name="${cmd.name}" users=${cmd.config.users} intervalMs=${cmd.config.intervalMs}` +
+                ` durationSec=${durationSeconds ?? '∞'}${cmd.initialStatus === 'paused' ? ' [paused]' : ''}`,
             );
           }
           break;

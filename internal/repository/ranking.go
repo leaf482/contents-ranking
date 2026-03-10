@@ -10,7 +10,10 @@ import (
 	"contents-ranking/internal/models"
 )
 
-const globalRankingKey = "ranking:global"
+const (
+	globalRankingKey   = "ranking:global"
+	trendingRankingKey = "ranking:trending"
+)
 
 var defaultVideoIDs = []string{
 	"video1", "video2", "video3", "video4", "video5",
@@ -51,6 +54,24 @@ func (r *RankingRepo) GetTopRankings(ctx context.Context, limit int64) ([]models
 	results, err := r.rdb.ZRevRangeWithScores(ctx, globalRankingKey, 0, limit-1).Result()
 	if err != nil {
 		return nil, fmt.Errorf("repository: ZREVRANGE %s: %w", globalRankingKey, err)
+	}
+
+	items := make([]models.RankingItem, len(results))
+	for i, z := range results {
+		items[i] = models.RankingItem{
+			VideoID: z.Member.(string),
+			Score:   z.Score,
+		}
+	}
+	return items, nil
+}
+
+// GetTopTrending returns the top `limit` videos by velocity score (last 60s),
+// highest first. Returns an empty slice (not nil) when no data exists.
+func (r *RankingRepo) GetTopTrending(ctx context.Context, limit int64) ([]models.RankingItem, error) {
+	results, err := r.rdb.ZRevRangeWithScores(ctx, trendingRankingKey, 0, limit-1).Result()
+	if err != nil {
+		return nil, fmt.Errorf("repository: ZREVRANGE %s: %w", trendingRankingKey, err)
 	}
 
 	items := make([]models.RankingItem, len(results))

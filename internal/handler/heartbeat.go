@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -21,9 +22,15 @@ func NewHandler(p kafkapkg.Producer) *Handler {
 	return &Handler{producer: p}
 }
 
+func debugLog(format string, args ...interface{}) {
+	if os.Getenv("DEBUG") != "" {
+		log.Printf("[handler] "+format, args...)
+	}
+}
+
 func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
-	log.Println("handler: HandleHeartbeat entered")
-	defer log.Println("handler: HandleHeartbeat exited")
+	debugLog("HandleHeartbeat entered")
+	defer debugLog("HandleHeartbeat exited")
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -37,7 +44,16 @@ func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Received heartbeat request for VideoID: %s", event.VideoID)
+	// Basic validation to prevent invalid events from entering the pipeline.
+	if event.VideoID == "" || event.SessionID == "" || event.Playhead < 0 || event.Timestamp == 0 {
+		log.Printf("handler: invalid heartbeat payload session=%s video=%s playhead=%d timestamp=%d",
+			event.SessionID, event.VideoID, event.Playhead, event.Timestamp)
+		http.Error(w, "invalid heartbeat payload", http.StatusBadRequest)
+		return
+	}
+
+	debugLog("received heartbeat session=%s user=%s video=%s playhead=%dms",
+		event.SessionID, event.UserID, event.VideoID, event.Playhead)
 
 	payload, err := json.Marshal(event)
 	if err != nil {
@@ -46,9 +62,9 @@ func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// VideoID as key routes all events for the same video to the same partition.
+	// SessionID as key routes all events for the same session to the same partition.
 	msg := kafka.Message{
-		Key:   []byte(event.VideoID),
+		Key:   []byte(event.SessionID),
 		Value: payload,
 	}
 
@@ -56,11 +72,11 @@ func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if err := h.producer.WriteMessages(ctx, msg); err != nil {
-		log.Printf("handler: kafka write error (video=%s): %v", event.VideoID, err)
+		log.Printf("handler: kafka write error (session=%s, video=%s): %v", event.SessionID, event.VideoID, err)
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	log.Printf("handler: published event session=%s video=%s", event.SessionID, event.VideoID)
+	debugLog("published event session=%s video=%s", event.SessionID, event.VideoID)
 	w.WriteHeader(http.StatusAccepted)
 }

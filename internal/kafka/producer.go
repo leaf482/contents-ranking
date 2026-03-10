@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/segmentio/kafka-go"
+
+	"contents-ranking/internal/metrics"
 )
 
 // Producer is the write interface; keeps the handler testable with a mock.
@@ -40,6 +44,125 @@ func (p *kafkaProducer) WriteMessages(ctx context.Context, msgs ...kafka.Message
 
 func (p *kafkaProducer) Close() error {
 	return p.writer.Close()
+}
+
+// bufferedProducer wraps a kafkaProducer with an in-memory buffer and background
+// batching worker. API handlers enqueue messages and return immediately.
+type bufferedProducer struct {
+	base      *kafkaProducer
+	queue     chan kafka.Message
+	maxBatch  int
+	linger    time.Duration
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	debugLogs bool
+}
+
+// NewBufferedProducer creates a Producer that buffers messages in-memory and
+// flushes them to Kafka in batches.
+func NewBufferedProducer(brokers []string, topic string, queueSize, maxBatch int, linger time.Duration) Producer {
+	base := NewProducer(brokers, topic).(*kafkaProducer)
+
+	if queueSize <= 0 {
+		queueSize = 10_000
+	}
+	if maxBatch <= 0 {
+		maxBatch = 100
+	}
+	if linger <= 0 {
+		linger = 5 * time.Millisecond
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &bufferedProducer{
+		base:      base,
+		queue:     make(chan kafka.Message, queueSize),
+		maxBatch:  maxBatch,
+		linger:    linger,
+		ctx:       ctx,
+		cancel:    cancel,
+		debugLogs: os.Getenv("DEBUG") != "",
+	}
+
+	p.wg.Add(1)
+	go p.run()
+
+	return p
+}
+
+// WriteMessages enqueues messages into the in-memory buffer and returns
+// immediately. If the queue is full, messages are dropped and counted.
+func (p *bufferedProducer) WriteMessages(ctx context.Context, msgs ...kafka.Message) error {
+	for _, m := range msgs {
+		select {
+		case p.queue <- m:
+		default:
+			metrics.APIKafkaQueueDroppedTotal.Inc()
+			if p.debugLogs {
+				log.Printf("api: kafka queue full, dropping message key=%s", string(m.Key))
+			}
+		}
+	}
+	return nil
+}
+
+func (p *bufferedProducer) run() {
+	defer p.wg.Done()
+
+	ticker := time.NewTicker(p.linger)
+	defer ticker.Stop()
+
+	batch := make([]kafka.Message, 0, p.maxBatch)
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := p.base.WriteMessages(ctx, batch...)
+		cancel()
+		if err != nil {
+			log.Printf("api: kafka batch write error: %v", err)
+		}
+
+		metrics.APIKafkaBatchSize.Observe(float64(len(batch)))
+		metrics.APIKafkaBatchFlushTotal.Inc()
+		if p.debugLogs {
+			log.Printf("api: kafka flush batch_size=%d", len(batch))
+		}
+
+		batch = batch[:0]
+	}
+
+	for {
+		select {
+		case <-p.ctx.Done():
+			flush()
+			return
+		case msg, ok := <-p.queue:
+			if !ok {
+				flush()
+				return
+			}
+			batch = append(batch, msg)
+			if len(batch) >= p.maxBatch {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
+}
+
+// Close stops the background worker, flushes remaining messages, and closes the
+// underlying Kafka writer.
+func (p *bufferedProducer) Close() error {
+	p.cancel()
+	close(p.queue)
+	p.wg.Wait()
+	return p.base.Close()
 }
 
 // EnsureTopicExists creates the topic if it doesn't exist. Safe to call repeatedly.
@@ -77,7 +200,7 @@ func EnsureTopicExists(brokers []string, topic string) error {
 
 	err = ctrlConn.CreateTopics(kafka.TopicConfig{
 		Topic:             topic,
-		NumPartitions:     3,
+		NumPartitions:     6,
 		ReplicationFactor: 1,
 	})
 	if err != nil {

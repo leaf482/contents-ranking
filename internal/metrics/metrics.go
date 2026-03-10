@@ -24,6 +24,29 @@ var (
 		[]string{"method", "path"},
 	)
 
+	// API Kafka producer batching metrics
+	APIKafkaBatchSize = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "api_kafka_batch_size",
+			Help:    "Number of messages flushed in a single Kafka batch from the API.",
+			Buckets: prometheus.ExponentialBuckets(1, 2, 10), // 1,2,4,...,512
+		},
+	)
+
+	APIKafkaBatchFlushTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "api_kafka_batch_flush_total",
+			Help: "Total number of Kafka batch flushes performed by the API.",
+		},
+	)
+
+	APIKafkaQueueDroppedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "api_kafka_queue_dropped_total",
+			Help: "Total number of heartbeat events dropped because the API Kafka queue was full.",
+		},
+	)
+
 	// Worker metrics
 	WorkerEventsProcessedTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -45,6 +68,13 @@ var (
 		prometheus.CounterOpts{
 			Name: "worker_ranking_updates_total",
 			Help: "Total number of ranking points awarded (ZINCRBY fired).",
+		},
+	)
+
+	WorkerRankingVelocityUpdatesTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ranking_velocity_updates_total",
+			Help: "Total number of trending velocity updates (per ranking point).",
 		},
 	)
 )

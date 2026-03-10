@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -23,11 +24,17 @@ import (
 // ARGV[4], ARGV[5] = video_id_1, playhead_1
 // ARGV[6], ARGV[7] = video_id_2, playhead_2
 // ...
-// Returns total ranking points awarded (sum of 0|1 per event).
+// Returns total ranking points awarded (sum of >=0 per event).
 var rankBatchScript = redis.NewScript(`
 local ranking_key = KEYS[1]
 local total_ranked = 0
 local n = #KEYS - 1
+
+-- Debug copies for the last processed event
+local debug_delta = 0
+local debug_accum = 0
+local debug_cur = 0
+local debug_last = 0
 
 for i = 1, n do
     local session_key = KEYS[1 + i]
@@ -42,24 +49,43 @@ for i = 1, n do
     local delta  = cur - last
     local ranked = 0
 
-    if delta > 0 and delta <= gap then
-        accum = accum + delta
-    elseif delta > gap then
-        accum = 0
+    debug_delta = delta
+    debug_accum = accum
+    debug_cur = cur
+    debug_last = last
+
+    if delta > 0 then
+        if delta <= gap then
+            accum = accum + delta
+        elseif delta > gap then
+            accum = 0
+        end
+
+        while accum >= thresh do
+            redis.call('ZINCRBY', ranking_key, 1, video_id)
+            accum = accum - thresh
+            ranked = ranked + 1
+            -- Trending velocity tracking
+            local now_parts = redis.call('TIME')
+            local now_ms = now_parts[1] * 1000 + math.floor(now_parts[2] / 1000)
+            local window_ms = ` + fmt.Sprint(velocityWindowSec*1000) + `
+            local velocity_key = 'ranking:velocity:' .. video_id
+            local trending_key = 'ranking:trending'
+
+            redis.call('ZADD', velocity_key, now_ms, now_ms)
+            redis.call('ZREMRANGEBYSCORE', velocity_key, 0, now_ms - window_ms)
+            local velocity = redis.call('ZCARD', velocity_key)
+            redis.call('ZADD', trending_key, velocity, video_id)
+        end
+
+        redis.call('HSET', session_key, 'last_playhead', cur, 'accumulated', accum)
     end
 
-    if accum >= thresh then
-        redis.call('ZINCRBY', ranking_key, 1, video_id)
-        accum = accum - thresh
-        ranked = 1
-    end
-
-    redis.call('HSET', session_key, 'last_playhead', cur, 'accumulated', accum)
     redis.call('EXPIRE', session_key, ttl)
     total_ranked = total_ranked + ranked
 end
 
-return total_ranked
+return {total_ranked, debug_delta, debug_accum, debug_cur, debug_last}
 `)
 
 // ProcessBatch runs the batch Lua script for multiple events in one Redis call.
@@ -87,7 +113,7 @@ func (p *Processor) ProcessBatch(ctx context.Context, msgs []kafka.Message) (ran
 		args = append(args, event.VideoID, event.Playhead)
 	}
 
-	result, err := rankBatchScript.Run(ctx, p.rdb, keys, args...).Int()
+	raw, err := rankBatchScript.Run(ctx, p.rdb, keys, args...).Result()
 	if err != nil {
 		for range msgs {
 			metrics.WorkerEventsProcessedTotal.WithLabelValues("error").Inc()
@@ -95,14 +121,46 @@ func (p *Processor) ProcessBatch(ctx context.Context, msgs []kafka.Message) (ran
 		return 0, fmt.Errorf("lua rankBatchScript: %w", err)
 	}
 
+	results, ok := raw.([]interface{})
+	if !ok || len(results) < 5 {
+		for range msgs {
+			metrics.WorkerEventsProcessedTotal.WithLabelValues("error").Inc()
+		}
+		return 0, fmt.Errorf("lua rankBatchScript: unexpected return type %T", raw)
+	}
+
+	toInt := func(v interface{}) int64 {
+		switch t := v.(type) {
+		case int64:
+			return t
+		case int:
+			return int64(t)
+		case float64:
+			return int64(t)
+		case string:
+			val, _ := strconv.ParseInt(t, 10, 64)
+			return val
+		default:
+			return 0
+		}
+	}
+
+	increments := toInt(results[0])
+	// Debug values are currently unused here but available:
+	// debugDelta := toInt(results[1])
+	// debugAccum := toInt(results[2])
+	// debugCur := toInt(results[3])
+	// debugLast := toInt(results[4])
+
 	for range msgs {
 		metrics.WorkerEventsProcessedTotal.WithLabelValues("success").Inc()
 	}
 	metrics.WorkerProcessingDuration.Observe(time.Since(start).Seconds())
 
-	for i := 0; i < result; i++ {
-		metrics.WorkerRankingUpdatesTotal.Inc()
+	if increments > 0 {
+		metrics.WorkerRankingUpdatesTotal.Add(float64(increments))
+		metrics.WorkerRankingVelocityUpdatesTotal.Add(float64(increments))
 	}
 
-	return result, nil
+	return int(increments), nil
 }
