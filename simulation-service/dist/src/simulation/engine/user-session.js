@@ -10,6 +10,8 @@ function createUserSession(input) {
         watchDurationMs: input.watchDurationMs,
         playheadMs: 0,
         lastHeartbeatAt: input.nowMs,
+        heartbeatIntervalMs: 500,
+        nextHeartbeatDueAt: input.nowMs + 500,
     };
 }
 //# sourceMappingURL=user-session.js.map

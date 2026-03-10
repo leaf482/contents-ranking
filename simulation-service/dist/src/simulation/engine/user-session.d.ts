@@ -5,6 +5,8 @@ export interface UserSession {
     watchDurationMs: number;
     playheadMs: number;
     lastHeartbeatAt: number;
+    heartbeatIntervalMs: number;
+    nextHeartbeatDueAt: number;
 }
 export interface NewSessionInput {
     userId: string;

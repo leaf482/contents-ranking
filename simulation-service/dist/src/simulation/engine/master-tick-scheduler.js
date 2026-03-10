@@ -250,8 +250,11 @@ let MasterTickScheduler = MasterTickScheduler_1 = class MasterTickScheduler {
         for (const [userId, session] of scenario.sessions) {
             const nextPlayhead = session.playheadMs + elapsedMs;
             session.playheadMs = nextPlayhead;
-            session.lastHeartbeatAt = nowMs;
-            if (session.playheadMs < session.watchDurationMs) {
+            if (session.playheadMs >= session.watchDurationMs) {
+                toDelete.push(userId);
+                continue;
+            }
+            if (nowMs >= session.nextHeartbeatDueAt) {
                 payloads.push({
                     session_id: session.sessionId,
                     user_id: session.userId,
@@ -259,9 +262,10 @@ let MasterTickScheduler = MasterTickScheduler_1 = class MasterTickScheduler {
                     playhead: session.playheadMs,
                     timestamp: nowMs,
                 });
-            }
-            else {
-                toDelete.push(userId);
+                session.lastHeartbeatAt = nowMs;
+                do {
+                    session.nextHeartbeatDueAt += session.heartbeatIntervalMs;
+                } while (nowMs >= session.nextHeartbeatDueAt);
             }
         }
         for (const userId of toDelete) {

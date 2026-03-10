@@ -5,6 +5,8 @@ export interface UserSession {
   watchDurationMs: number;
   playheadMs: number;
   lastHeartbeatAt: number;
+  heartbeatIntervalMs: number;
+  nextHeartbeatDueAt: number;
 }
 
 export interface NewSessionInput {
@@ -25,5 +27,7 @@ export function createUserSession(input: NewSessionInput): UserSession {
     watchDurationMs: input.watchDurationMs,
     playheadMs: 0,
     lastHeartbeatAt: input.nowMs,
+    heartbeatIntervalMs: 500,
+    nextHeartbeatDueAt: input.nowMs + 500,
   };
 }

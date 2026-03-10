@@ -317,9 +317,15 @@ export class MasterTickScheduler implements OnModuleDestroy {
     for (const [userId, session] of scenario.sessions) {
       const nextPlayhead = session.playheadMs + elapsedMs;
       session.playheadMs = nextPlayhead;
-      session.lastHeartbeatAt = nowMs;
 
-      if (session.playheadMs < session.watchDurationMs) {
+      // Session ends once watch duration is reached.
+      if (session.playheadMs >= session.watchDurationMs) {
+        toDelete.push(userId);
+        continue;
+      }
+
+      // Emit heartbeat only when due (per-session cadence), even though tick is 100ms.
+      if (nowMs >= session.nextHeartbeatDueAt) {
         payloads.push({
           session_id: session.sessionId,
           user_id: session.userId,
@@ -327,9 +333,12 @@ export class MasterTickScheduler implements OnModuleDestroy {
           playhead: session.playheadMs,
           timestamp: nowMs,
         });
-      } else {
-        // One last heartbeat at completion is optional; keep it simple and end session.
-        toDelete.push(userId);
+        session.lastHeartbeatAt = nowMs;
+
+        // Advance schedule; if ticks were delayed, catch up without changing cadence.
+        do {
+          session.nextHeartbeatDueAt += session.heartbeatIntervalMs;
+        } while (nowMs >= session.nextHeartbeatDueAt);
       }
     }
 
