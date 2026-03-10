@@ -17,7 +17,7 @@ import (
 const (
 	defaultLimit = 10
 	maxLimit     = 100
-	cacheTTL     = 2 * time.Second
+	cacheTTL     = 1 * time.Second
 )
 
 type rankingCache struct {
