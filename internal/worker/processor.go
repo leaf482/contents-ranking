@@ -18,7 +18,7 @@ import (
 
 const (
 	maxHeartbeatGap   = 35_000 // ms — gaps larger than this are seeks/pauses
-	rankThreshold     = 30_000 // ms — accumulated watch time needed for one ranking point
+	rankThreshold     = 5_000  // ms — accumulated watch time needed for one ranking point
 	sessionTTL        = 6 * time.Hour
 	rankingKey        = "ranking:global"
 	velocityWindowSec = 60

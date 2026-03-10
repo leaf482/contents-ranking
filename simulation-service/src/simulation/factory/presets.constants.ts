@@ -1,7 +1,7 @@
 /**
  * Scenario Presets - Predefined traffic patterns for the Simulation Factory.
  * Uses 1x real-time playback (playhead += intervalMs per heartbeat).
- * Worker threshold: 30s accumulated watch time = 1 ranking point.
+ * Worker threshold: 5s accumulated watch time = 1 ranking point (TEMP for fast testing).
  */
 
 export interface ScenarioPreset {
@@ -21,9 +21,9 @@ export const SCENARIO_PRESETS: ScenarioPreset[] = [
   {
     id: 'hot_trending',
     name: 'Hot Trending',
-    description: 'High engagement, 60s watch',
+    description: 'High engagement, 10s watch',
     users: 1000,
-    watchSeconds: 60,
+    watchSeconds: 10,
     intervalMs: 500,
     durationSeconds: 120,
     scoreIncreases: true,
@@ -33,7 +33,7 @@ export const SCENARIO_PRESETS: ScenarioPreset[] = [
     name: 'Regular',
     description: 'Standard load',
     users: 100,
-    watchSeconds: 30,
+    watchSeconds: 5,
     intervalMs: 500,
     durationSeconds: 120,
     scoreIncreases: true,
@@ -43,7 +43,7 @@ export const SCENARIO_PRESETS: ScenarioPreset[] = [
     name: 'Mild Trending',
     description: 'Moderate engagement',
     users: 500,
-    watchSeconds: 30,
+    watchSeconds: 5,
     intervalMs: 500,
     durationSeconds: 120,
     scoreIncreases: true,
@@ -51,9 +51,9 @@ export const SCENARIO_PRESETS: ScenarioPreset[] = [
   {
     id: 'half_hot_trending',
     name: 'Half Hot Trending',
-    description: '20s watch — Score does NOT increase (< 30s threshold)',
+    description: '3s watch — Score does NOT increase (< 5s threshold)',
     users: 1000,
-    watchSeconds: 20,
+    watchSeconds: 3,
     intervalMs: 500,
     durationSeconds: 120,
     scoreIncreases: false,
@@ -61,9 +61,9 @@ export const SCENARIO_PRESETS: ScenarioPreset[] = [
   {
     id: 'viral_spike',
     name: 'Viral Spike',
-    description: 'High burst, 35s watch',
+    description: 'High burst, 10s watch',
     users: 2000,
-    watchSeconds: 35,
+    watchSeconds: 10,
     intervalMs: 500,
     durationSeconds: 120,
     scoreIncreases: true,
@@ -71,9 +71,9 @@ export const SCENARIO_PRESETS: ScenarioPreset[] = [
   {
     id: 'noise_traffic',
     name: 'Noise Traffic',
-    description: 'Spam-like, 5s watch — Score does NOT increase (< 30s threshold)',
+    description: 'Spam-like, 3s watch — Score does NOT increase (< 5s threshold)',
     users: 1500,
-    watchSeconds: 5,
+    watchSeconds: 3,
     intervalMs: 500,
     durationSeconds: 60,
     scoreIncreases: false,
@@ -81,9 +81,9 @@ export const SCENARIO_PRESETS: ScenarioPreset[] = [
   {
     id: 'long_engagement',
     name: 'Long Engagement',
-    description: 'Deep watch, 120s',
+    description: 'Deep watch, 15s',
     users: 200,
-    watchSeconds: 120,
+    watchSeconds: 15,
     intervalMs: 500,
     durationSeconds: 180,
     scoreIncreases: true,
