@@ -70,13 +70,20 @@ for i = 1, n do
             redis.call('ZINCRBY', ranking_key, 1, video_id)
             accum = accum - thresh
             ranked = ranked + 1
-            -- TEMP DISABLED FOR THROUGHPUT BENCHMARK
-            -- Trending/velocity logic intentionally disabled to isolate the
-            -- performance impact of the following Redis operations in the hot path:
-            --   - INCR velocity seq
-            --   - ZADD/ZREMRANGEBYSCORE/ZCARD velocity window
-            --   - ZADD ranking:trending
-            --   - EXPIRE velocity keys
+
+            -- Trending velocity tracking (same semantics as single-event script)
+            local velocity_key = 'ranking:velocity:' .. video_id
+            local trending_key = 'ranking:trending'
+            local seq = redis.call('INCR', velocity_key .. ':seq')
+            local member = tostring(now_ms) .. '-' .. tostring(seq)
+
+            redis.call('ZADD', velocity_key, now_ms, member)
+            redis.call('ZREMRANGEBYSCORE', velocity_key, 0, now_ms - window_ms)
+            local velocity = redis.call('ZCARD', velocity_key)
+            redis.call('ZADD', trending_key, velocity, video_id)
+            local window_sec = math.floor(window_ms / 1000)
+            redis.call('EXPIRE', velocity_key, window_sec * 2)
+            redis.call('EXPIRE', velocity_key .. ':seq', window_sec * 2)
         end
 
         redis.call('HSET', session_key, 'last_playhead', cur, 'accumulated', accum)
