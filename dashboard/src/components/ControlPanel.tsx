@@ -123,7 +123,7 @@ export function ControlPanel() {
               ) : (
                 presets.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name} ({p.users} users)
+                    {p.name} (λ ≈ {p.users}/s)
                   </option>
                 ))
               )}
@@ -144,7 +144,7 @@ export function ControlPanel() {
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Interval (ms)</label>
+            <label className="text-xs text-gray-500">Heartbeat Interval (ms)</label>
             <input
               type="number"
               min={100}
@@ -163,6 +163,16 @@ export function ControlPanel() {
             {loading ? 'Deploying...' : 'Deploy'}
           </button>
         </div>
+
+        {selectedPreset && (
+          <div className="text-xs text-gray-400 max-w-xs">
+            <div className="font-semibold text-gray-300">{selectedPreset.name}</div>
+            <div>
+              λ ≈ {selectedPreset.users}/s arrivals · watch duration ~{selectedPreset.watchSeconds}
+              s · heartbeat interval {selectedPreset.intervalMs}ms
+            </div>
+          </div>
+        )}
 
         {/* Live Status */}
         <div className="flex items-center gap-3">

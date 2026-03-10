@@ -9,7 +9,22 @@ interface ActiveScenario {
   id: string;
   name: string;
   status: string;
-  config: { users: number; targetVideoId: string };
+  config: {
+    // Legacy fields for backwards compatibility
+    users?: number;
+    targetVideoId?: string;
+    // Lifecycle-based simulation config
+    baseTraffic?: {
+      lambdaUsersPerSecond?: number;
+    };
+    injection?: {
+      type?: string;
+      targetVideoId?: string;
+      totalUsers?: number;
+      durationMs?: number;
+    };
+    videoPool?: string[];
+  };
   stats: { emittedEvents: number; activeUsers: number };
 }
 
@@ -117,7 +132,53 @@ export function ScenarioList() {
                 </span>
               </div>
               <div className="mb-3 text-xs text-gray-500">
-                {s.config.users} users → {getVideoTitle(s.config.targetVideoId)} | {s.stats.emittedEvents} events
+                {(() => {
+                  const parts: string[] = [];
+                  const base = s.config.baseTraffic;
+                  const inj = s.config.injection;
+                  const videoPool = s.config.videoPool;
+                  const primaryVideoId =
+                    inj?.targetVideoId ?? s.config.targetVideoId ?? videoPool?.[0];
+
+                  if (base && typeof base.lambdaUsersPerSecond === 'number') {
+                    parts.push(`λ=${base.lambdaUsersPerSecond}/s arrivals`);
+                  }
+
+                  if (inj && inj.type && inj.type !== 'none') {
+                    const durationSec =
+                      inj.durationMs !== undefined
+                        ? Math.round(inj.durationMs / 1000)
+                        : undefined;
+                    let text = `+ ${inj.type}`;
+                    if (primaryVideoId) {
+                      text += ` → ${getVideoTitle(primaryVideoId)}`;
+                    }
+                    if (inj.totalUsers !== undefined || durationSec !== undefined) {
+                      const total = inj.totalUsers ?? '?';
+                      const dur = durationSec ?? '?';
+                      text += ` (${total} users / ${dur}s)`;
+                    }
+                    parts.push(text);
+                  }
+
+                  // Fallback to legacy display when lifecycle fields are missing
+                  if (parts.length === 0) {
+                    if (s.config.users !== undefined && primaryVideoId) {
+                      parts.push(
+                        `${s.config.users} users → ${getVideoTitle(primaryVideoId)}`,
+                      );
+                    } else if (primaryVideoId) {
+                      parts.push(`→ ${getVideoTitle(primaryVideoId)}`);
+                    }
+                  }
+
+                  return (
+                    <>
+                      {parts.join(' | ')} | {s.stats.activeUsers} active sessions |{' '}
+                      {s.stats.emittedEvents} events
+                    </>
+                  );
+                })()}
               </div>
               <div className="flex gap-2">
                 {(optimistic[s.id]?.status ?? s.status) === 'running' ? (

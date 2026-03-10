@@ -150,7 +150,9 @@ export function ScenarioBuilder() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-gray-500">Users</label>
+          <label className="mb-1 block text-xs text-gray-500">
+            Arrival Rate (λ users/sec)
+          </label>
           <input
             type="number"
             min={1}
@@ -175,7 +177,9 @@ export function ScenarioBuilder() {
           </select>
         </div>
         <div>
-          <label className="mb-1 block text-xs text-gray-500">Watch (s)</label>
+          <label className="mb-1 block text-xs text-gray-500">
+            Average Watch Duration (seconds)
+          </label>
           <input
             type="number"
             min={1}
@@ -185,7 +189,9 @@ export function ScenarioBuilder() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-gray-500">Interval (ms)</label>
+          <label className="mb-1 block text-xs text-gray-500">
+            Heartbeat Interval (ms)
+          </label>
           <input
             type="number"
             min={100}
@@ -208,7 +214,12 @@ export function ScenarioBuilder() {
           />
         </div>
       </div>
-      <div className="mt-4 flex items-center gap-3">
+      <p className="mt-4 text-xs leading-relaxed text-gray-500">
+        This scenario simulates user sessions arriving at rate λ. Each session
+        watches a video for a sampled duration and sends heartbeats at the
+        configured interval.
+      </p>
+      <div className="mt-3 flex items-center gap-3">
         <button
           type="submit"
           disabled={loading}

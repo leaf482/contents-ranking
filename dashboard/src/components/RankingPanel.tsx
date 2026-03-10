@@ -73,6 +73,7 @@ function AttributionTooltip({
 
 export function RankingPanel() {
   const [data, setData] = useState<RankingItem[] | null>(null);
+  const [trending, setTrending] = useState<RankingItem[] | null>(null);
   const [attribution, setAttribution] = useState<Record<string, string[]>>({});
   const [attributionDetail, setAttributionDetail] = useState<
     Record<string, AttributionDetail[]>
@@ -87,8 +88,9 @@ export function RankingPanel() {
 
   const fetchRanking = useCallback(async () => {
     try {
-      const [rankRes, attrRes, detailRes] = await Promise.all([
+      const [rankRes, trendingRes, attrRes, detailRes] = await Promise.all([
         fetch(`${GO_API_BASE}/v1/ranking?limit=10`, { cache: 'no-store' }),
+        fetch(`${GO_API_BASE}/v1/ranking/trending?limit=10`, { cache: 'no-store' }),
         fetch(`${SIMULATION_BASE}/v1/factory/scenarios/attribution`),
         fetch(`${SIMULATION_BASE}/v1/factory/scenarios/attribution/detail`),
       ]);
@@ -97,6 +99,12 @@ export function RankingPanel() {
       console.log('[RankingPanel] rawItems from API:', rawItems);
       // Normalize keys: API sends video_id/score; accept either snake_case or Score if ever sent
       const items: RankingItem[] = rawItems.map((row: { video_id?: string; score?: number; VideoID?: string; Score?: number }) => ({
+        video_id: row.video_id ?? row.VideoID ?? '',
+        score: Number(row.score ?? row.Score ?? 0),
+      }));
+      const trendingJson = await trendingRes.json();
+      const rawTrending = Array.isArray(trendingJson) ? trendingJson : [];
+      const trendingItems: RankingItem[] = rawTrending.map((row: { video_id?: string; score?: number; VideoID?: string; Score?: number }) => ({
         video_id: row.video_id ?? row.VideoID ?? '',
         score: Number(row.score ?? row.Score ?? 0),
       }));
@@ -140,6 +148,7 @@ export function RankingPanel() {
       setScoreChanged(scoreDeltas);
       setFirstEntryIds(newFirstEntry);
       setData(items);
+      setTrending(trendingItems);
       setLastSyncedAt(Date.now());
 
       if (scoreDeltas.size > 0) {
@@ -150,13 +159,15 @@ export function RankingPanel() {
       }
     } catch {
       setData([]);
+      setTrending([]);
     }
   }, []);
 
   useInterval(fetchRanking, 800);
 
   const DISPLAY_LIMIT = 10;
-  const displayItems = data ? data.slice(0, DISPLAY_LIMIT) : [];
+  const displayGlobal = data ? data.slice(0, DISPLAY_LIMIT) : [];
+  const displayTrending = trending ? trending.slice(0, DISPLAY_LIMIT) : [];
 
   const getVideoStats = (videoId: string) => {
     const details = attributionDetail[videoId] ?? [];
@@ -171,35 +182,101 @@ export function RankingPanel() {
         Attribution Ranking Board
       </h2>
       <div className="min-h-0 flex-1 overflow-hidden">
-        {data === null ? (
+        {data === null && trending === null ? (
           <div className="flex h-24 items-center justify-center text-gray-500">
             Loading...
           </div>
-        ) : displayItems.length === 0 ? (
+        ) : displayGlobal.length === 0 && displayTrending.length === 0 ? (
           <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-gray-600 bg-gray-900/30">
             <p className="text-sm text-gray-500">Waiting for Simulation Data...</p>
           </div>
         ) : (
-          <ul className="space-y-1.5">
-            <li className="grid grid-cols-[2rem_1.25rem_1fr_4rem_3.5rem_4rem] items-center gap-2 px-3 py-1 text-xs font-medium uppercase text-gray-500">
-              <span>#</span>
-              <span />
-              <span>Video</span>
-              <span className="text-right">Viewers</span>
-              <span className="text-right">HPS</span>
-              <span className="text-right">Score</span>
-            </li>
-            <AnimatePresence mode="popLayout">
-              {displayItems.map((item, i) => {
-                const { activeViewers, hps } = getVideoStats(item.video_id);
-                const isFirstEntry = firstEntryIds.has(item.video_id);
-                const details = attributionDetail[item.video_id] ?? [];
-                return (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <ul className="space-y-1.5">
+              <li className="grid grid-cols-[2rem_1.25rem_1fr_4rem_3.5rem_4rem] items-center gap-2 px-3 py-1 text-xs font-medium uppercase text-gray-500">
+                <span>#</span>
+                <span />
+                <span>Video</span>
+                <span className="text-right">Viewers</span>
+                <span className="text-right">HPS</span>
+                <span className="text-right">Score</span>
+              </li>
+              <AnimatePresence mode="popLayout">
+                {displayGlobal.map((item, i) => {
+                  const { activeViewers, hps } = getVideoStats(item.video_id);
+                  const isFirstEntry = firstEntryIds.has(item.video_id);
+                  const details = attributionDetail[item.video_id] ?? [];
+                  return (
+                    <motion.li
+                      key={item.video_id}
+                      layout
+                      layoutId={item.video_id}
+                      initial={isFirstEntry ? { opacity: 0 } : false}
+                      animate={{ opacity: 1 }}
+                      transition={{
+                        type: 'spring',
+                        stiffness: 400,
+                        damping: 30,
+                        opacity: { duration: 0.4 },
+                      }}
+                      className={`grid grid-cols-[2rem_1.25rem_1fr_4rem_3.5rem_4rem] items-center gap-2 rounded-lg border px-3 py-1.5 ${
+                        isFirstEntry
+                          ? 'animate-first-entry border-cyan-500/60 bg-cyan-900/20'
+                          : 'border-gray-600 bg-gray-700/30'
+                      }`}
+                    >
+                      <span className="font-mono text-gray-400">#{i + 1}</span>
+                      <span className="flex justify-center">
+                        <RankIndicator change={rankChanges.get(item.video_id) ?? 'same'} />
+                      </span>
+                      <div className="min-w-0 overflow-hidden">
+                        <div className="flex flex-col gap-0.5">
+                          <span className="truncate font-mono text-gray-300">
+                            {getVideoTitle(item.video_id)}
+                          </span>
+                          {attribution[item.video_id]?.length ? (
+                            <AttributionTooltip details={details}>
+                              <span
+                                className="truncate text-xs text-cyan-400"
+                                title={`Likely driven by: ${attribution[item.video_id].join(', ')}`}
+                              >
+                                By: {attribution[item.video_id].join(', ')}
+                              </span>
+                            </AttributionTooltip>
+                          ) : null}
+                        </div>
+                      </div>
+                      <span className="text-right font-mono text-xs tabular-nums text-gray-400">
+                        {activeViewers}
+                      </span>
+                      <span className="text-right font-mono text-xs tabular-nums text-gray-400">
+                        {hps.toFixed(1)}
+                      </span>
+                      <span className="text-right">
+                        <NumberTicker
+                          value={Math.round(item.score)}
+                          animate={scoreChanged.has(item.video_id)}
+                        />
+                      </span>
+                    </motion.li>
+                  );
+                })}
+              </AnimatePresence>
+            </ul>
+
+            <ul className="space-y-1.5">
+              <li className="grid grid-cols-[2rem_1fr_4rem] items-center gap-2 px-3 py-1 text-xs font-medium uppercase text-gray-500">
+                <span>#</span>
+                <span>Trending Now</span>
+                <span className="text-right">Velocity</span>
+              </li>
+              <AnimatePresence mode="popLayout">
+                {displayTrending.map((item, i) => (
                   <motion.li
                     key={item.video_id}
                     layout
-                    layoutId={item.video_id}
-                    initial={isFirstEntry ? { opacity: 0 } : false}
+                    layoutId={`trending-${item.video_id}`}
+                    initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     transition={{
                       type: 'spring',
@@ -207,45 +284,20 @@ export function RankingPanel() {
                       damping: 30,
                       opacity: { duration: 0.4 },
                     }}
-                    className={`grid grid-cols-[2rem_1.25rem_1fr_4rem_3.5rem_4rem] items-center gap-2 rounded-lg border px-3 py-1.5 ${
-                      isFirstEntry
-                        ? 'animate-first-entry border-cyan-500/60 bg-cyan-900/20'
-                        : 'border-gray-600 bg-gray-700/30'
-                    }`}
+                    className="grid grid-cols-[2rem_1fr_4rem] items-center gap-2 rounded-lg border border-gray-600 bg-gray-700/30 px-3 py-1.5"
                   >
                     <span className="font-mono text-gray-400">#{i + 1}</span>
-                    <span className="flex justify-center">
-                      <RankIndicator change={rankChanges.get(item.video_id) ?? 'same'} />
-                    </span>
-                    <div className="min-w-0 overflow-hidden">
-                      <div className="flex flex-col gap-0.5">
-                        <span className="truncate font-mono text-gray-300">{getVideoTitle(item.video_id)}</span>
-                        {attribution[item.video_id]?.length ? (
-                          <AttributionTooltip details={details}>
-                            <span className="truncate text-xs text-cyan-400" title={`Likely driven by: ${attribution[item.video_id].join(', ')}`}>
-                              By: {attribution[item.video_id].join(', ')}
-                            </span>
-                          </AttributionTooltip>
-                        ) : null}
-                      </div>
-                    </div>
-                    <span className="text-right font-mono text-xs tabular-nums text-gray-400">
-                      {activeViewers}
-                    </span>
-                    <span className="text-right font-mono text-xs tabular-nums text-gray-400">
-                      {hps.toFixed(1)}
+                    <span className="truncate font-mono text-gray-300">
+                      {getVideoTitle(item.video_id)}
                     </span>
                     <span className="text-right">
-                      <NumberTicker
-                        value={item.score}
-                        animate={scoreChanged.has(item.video_id)}
-                      />
+                      <NumberTicker value={Math.round(item.score)} animate={false} />
                     </span>
                   </motion.li>
-                );
-              })}
-            </AnimatePresence>
-          </ul>
+                ))}
+              </AnimatePresence>
+            </ul>
+          </div>
         )}
       </div>
       <div className="mt-2 flex shrink-0 justify-end">
