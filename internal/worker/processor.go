@@ -73,11 +73,20 @@ if delta > 0 then
         -- Trending velocity tracking
         local velocity_key = 'ranking:velocity:' .. ARGV[1]
         local trending_key = 'ranking:trending'
+        -- Use a per-video monotonic counter to ensure each velocity
+        -- event has a unique member, even when multiple events share
+        -- the same millisecond timestamp.
+        local seq = redis.call('INCR', velocity_key .. ':seq')
+        local member = tostring(now_ms) .. '-' .. tostring(seq)
 
-        redis.call('ZADD', velocity_key, now_ms, now_ms)
+        redis.call('ZADD', velocity_key, now_ms, member)
         redis.call('ZREMRANGEBYSCORE', velocity_key, 0, now_ms - window_ms)
         local velocity = redis.call('ZCARD', velocity_key)
         redis.call('ZADD', trending_key, velocity, ARGV[1])
+        -- TTL so inactive velocity keys are removed and do not leak memory
+        local window_sec = math.floor(window_ms / 1000)
+        redis.call('EXPIRE', velocity_key, window_sec * 2)
+        redis.call('EXPIRE', velocity_key .. ':seq', window_sec * 2)
     end
 
     redis.call('HSET', KEYS[1], 'last_playhead', cur, 'accumulated', accum)

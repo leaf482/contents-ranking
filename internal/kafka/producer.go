@@ -29,7 +29,7 @@ func NewProducer(brokers []string, topic string) Producer {
 	w := &kafka.Writer{
 		Addr:                   kafka.TCP(brokers...),
 		Topic:                  topic,
-		Balancer:               &kafka.Hash{}, // same VideoID → same partition
+		Balancer:               &kafka.Hash{}, // hash of message Key → partition
 		Async:                  false,
 		WriteTimeout:           2 * time.Second,
 		ReadTimeout:            2 * time.Second,

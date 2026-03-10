@@ -62,9 +62,12 @@ func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SessionID as key routes all events for the same session to the same partition.
+	// Composite key (session_id:video_id) preserves ordering for the same user
+	// watching the same video while distributing traffic across partitions when
+	// many users watch the same viral video.
+	partitionKey := event.SessionID + ":" + event.VideoID
 	msg := kafka.Message{
-		Key:   []byte(event.SessionID),
+		Key:   []byte(partitionKey),
 		Value: payload,
 	}
 

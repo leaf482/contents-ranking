@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -25,12 +26,14 @@ func New(brokers []string, topic, groupID string, processor *Processor, batchSiz
 		flushInterval = 100 * time.Millisecond
 	}
 	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:        brokers,
-		Topic:          topic,
-		GroupID:        groupID,
-		MinBytes:       1,
-		MaxBytes:       10e6,
-		CommitInterval: time.Second,
+		Brokers:  brokers,
+		Topic:    topic,
+		GroupID:  groupID,
+		MinBytes: 1,
+		MaxBytes: 10e6,
+		// CommitInterval=0 disables auto commits; we only commit offsets
+		// after a batch has been successfully processed to avoid message loss.
+		CommitInterval: 0,
 	})
 	return &Worker{
 		reader:    r,
@@ -52,6 +55,12 @@ func debugLog(format string, args ...interface{}) {
 func (w *Worker) Run(ctx context.Context) {
 	log.Println("worker: starting consumer loop (batch mode)")
 	log.Printf("worker: batch config size=%d flush=%v", w.batchSize, w.flushInt)
+
+	// Derive a child context so this worker can cancel its own internal
+	// goroutines (producer/batcher) on fatal batch failures without
+	// affecting unrelated parent work.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	msgCh := make(chan kafka.Message, w.batchSize*2)
 	var wg sync.WaitGroup
@@ -88,33 +97,53 @@ func (w *Worker) Run(ctx context.Context) {
 		ticker := time.NewTicker(w.flushInt)
 		defer ticker.Stop()
 
-		flush := func(ctx context.Context) {
+		// flush processes the current in-memory batch.
+		// Important failure semantics:
+		//   - The batch is only cleared after BOTH processing and offset commit
+		//     succeed. This ensures messages are not dropped from memory on
+		//     transient failures and can be retried.
+		//   - If processing or commit fails, the batch remains in memory and
+		//     will be retried on the next flush trigger (size or interval).
+		flush := func(ctx context.Context) error {
 			if len(batch) == 0 {
-				return
+				return nil
 			}
 			toProcess := make([]kafka.Message, len(batch))
 			copy(toProcess, batch)
-			batch = batch[:0]
 
 			ranked, err := w.processor.ProcessBatch(ctx, toProcess)
 			if err != nil {
-				log.Printf("worker: batch process error: %v", err)
-				return
+				err = fmt.Errorf("batch process error: %w", err)
+				log.Printf("worker: %v", err)
+				return err
 			}
 			if err := w.reader.CommitMessages(ctx, toProcess...); err != nil {
-				log.Printf("worker: batch commit error: %v", err)
+				err = fmt.Errorf("batch commit error: %w", err)
+				log.Printf("worker: %v", err)
+				// Keep the batch in memory so it can be retried; offsets have
+				// not been committed, so reprocessing is safer than loss.
+				return err
 			}
+			// Processing and commit both succeeded; it is now safe to drop the batch.
+			batch = batch[:0]
 			log.Printf("worker: processed batch size=%d ranked=%d", len(toProcess), ranked)
+			return nil
 		}
 
 		drainAndFlush := func(ctx context.Context) {
 			for msg := range msgCh {
 				batch = append(batch, msg)
 				if len(batch) >= w.batchSize {
-					flush(ctx)
+					if err := flush(ctx); err != nil {
+						// During shutdown we do best-effort flushing; errors are
+						// logged by flush and do not change shutdown behavior.
+						log.Printf("worker: flush error during shutdown: %v", err)
+					}
 				}
 			}
-			flush(ctx)
+			if err := flush(ctx); err != nil {
+				log.Printf("worker: flush error during shutdown: %v", err)
+			}
 		}
 
 		for {
@@ -127,16 +156,29 @@ func (w *Worker) Run(ctx context.Context) {
 				return
 			case msg, ok := <-msgCh:
 				if !ok {
-					flush(ctx)
+					if err := flush(ctx); err != nil {
+						log.Printf("worker: flush error on channel close: %v", err)
+					}
 					return
 				}
 				batch = append(batch, msg)
 				if len(batch) >= w.batchSize {
-					flush(ctx)
+					if err := flush(ctx); err != nil {
+						log.Printf("worker: fatal batch flush error: %v; stopping worker", err)
+						// Cancel the worker context so the producer can stop and
+						// the Run method can return. Offsets for this batch were
+						// not committed, so they will be safely reprocessed.
+						cancel()
+						return
+					}
 					ticker.Reset(w.flushInt)
 				}
 			case <-ticker.C:
-				flush(ctx)
+				if err := flush(ctx); err != nil {
+					log.Printf("worker: fatal batch flush error on interval: %v; stopping worker", err)
+					cancel()
+					return
+				}
 			}
 		}
 	}()

@@ -59,8 +59,24 @@ var (
 	WorkerProcessingDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Name:    "worker_processing_duration_seconds",
-			Help:    "Time spent processing a single Kafka message (Redis Lua included).",
+			Help:    "Time spent processing a single Kafka message in the worker (non-batch path).",
 			Buckets: prometheus.DefBuckets,
+		},
+	)
+
+	WorkerBatchDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "worker_batch_duration_seconds",
+			Help:    "Time spent processing a batch of Kafka messages in the worker.",
+			Buckets: prometheus.DefBuckets,
+		},
+	)
+
+	WorkerBatchSize = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "worker_batch_size",
+			Help:    "Number of Kafka messages processed in a single worker batch.",
+			Buckets: prometheus.ExponentialBuckets(1, 2, 10), // 1,2,4,...,512
 		},
 	)
 
