@@ -33,9 +33,10 @@ export class LoadStrategy {
 
     const tasks = Array.from({ length: count }, (_, i) => {
       const userId = userIds[i % userIds.length];
-      const videoId = scenario.video_ids[
-        Math.floor(Math.random() * scenario.video_ids.length)
-      ];
+      const videoId =
+        scenario.video_ids[
+          Math.floor(Math.random() * scenario.video_ids.length)
+        ];
 
       // Advance this user's playhead by watch_seconds (converted to ms)
       const prev = playheads.get(userId) ?? 0;
@@ -52,9 +53,7 @@ export class LoadStrategy {
 
       return limit(async () => {
         try {
-          await firstValueFrom(
-            this.http.post(targetUrl, payload),
-          );
+          await firstValueFrom(this.http.post(targetUrl, payload));
           sent++;
         } catch (err: unknown) {
           errors++;

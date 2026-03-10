@@ -1,6 +1,9 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { SimulationService } from './simulation.service';
-import { SimulationScenario, SimulationStatus } from './interfaces/scenario.interface';
+import {
+  SimulationScenario,
+  SimulationStatus,
+} from './interfaces/scenario.interface';
 import { ScenarioRegistry } from './engine/scenario-registry';
 
 @Controller('v1/simulation')

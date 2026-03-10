@@ -6,10 +6,43 @@
 export type ScenarioStatus = 'running' | 'paused' | 'stopped';
 
 export interface ScenarioConfig {
-  users: number;
-  targetVideoId: string;
-  watchSeconds: number;
-  intervalMs: number;
+  /**
+   * Base traffic model (continuous arrivals).
+   * Each second we sample usersPerSecond ~ Poisson(lambdaUsersPerSecond).
+   */
+  baseTraffic?: {
+    lambdaUsersPerSecond: number;
+  };
+
+  /**
+   * Scenario injection model (additional user groups beyond base traffic).
+   * Injection timing/shape is handled by the tick scheduler.
+   */
+  injection?: {
+    type: 'none' | 'hot_trending' | 'viral_spike';
+    /** For injections that target one video strongly */
+    targetVideoId?: string;
+    /** Approx total users to inject over the injection window */
+    totalUsers?: number;
+    /** Duration window (ms) during which to inject */
+    durationMs?: number;
+  };
+
+  /**
+   * Video pool used by weighted selection.
+   * Order matters: earlier items are treated as more popular.
+   */
+  videoPool: string[];
+
+  /** Zipf skew for weighted video selection. Higher = more head-heavy. */
+  zipfSkew?: number;
+
+  /**
+   * Watch duration distribution.
+   * If omitted, defaults to: 50%→3s, 30%→10s, 15%→30s, 5%→60s
+   */
+  watchDurationDistribution?: Array<{ seconds: number; weight: number }>;
+
   /** Optional duration in ticks (100ms each). When reached, scenario stops. */
   durationTicks?: number;
 }
@@ -18,8 +51,6 @@ export interface ScenarioStats {
   emittedEvents: number;
 }
 
-const DEFAULT_RAMP_TICKS = 100; // 10s at 100ms tick
-
 export interface Scenario {
   id: string;
   name: string;
@@ -27,27 +58,25 @@ export interface Scenario {
   config: ScenarioConfig;
   stats: ScenarioStats;
   elapsedTicks: number;
+  /** Active concurrent sessions */
   activeUsers: number;
-  rampUpTicks: number;
-  playheads: Map<string, number>;
+  /** Active sessions keyed by userId */
+  sessions: Map<string, import('./user-session').UserSession>;
+  /** For generating distinct user IDs per scenario */
+  userSeq: number;
+  /** Scenario start time (ms) for injection timing */
+  startedAtMs: number;
   /** Chaos: temporary load multiplier (e.g. 5 for 5x spike) */
   loadMultiplier?: number;
   /** When loadMultiplier expires (Unix ms) */
   spikeEndMs?: number;
 }
 
-function defaultRampTicks(users: number): number {
-  return Math.max(10, Math.min(100, Math.floor(users / 5)));
-}
-
 /** Template for creating scenarios (presets) */
 export interface ScenarioTemplate {
   id: string;
   name: string;
-  users: number;
-  targetVideoId?: string;
-  watchSeconds: number;
-  intervalMs: number;
+  config: ScenarioConfig;
   duration_seconds?: number;
 }
 
@@ -68,49 +97,67 @@ const TEMPLATES: Record<string, ScenarioTemplate> = {
   normal: {
     id: 'normal',
     name: 'Normal',
-    users: 100,
-    watchSeconds: 30,
-    intervalMs: 500,
+    config: {
+      baseTraffic: { lambdaUsersPerSecond: 50 },
+      injection: { type: 'none' },
+      videoPool: [...DEFAULT_VIDEO_IDS],
+      zipfSkew: 1.1,
+    },
     duration_seconds: 120,
   },
   normal_300: {
     id: 'normal_300',
     name: 'Normal (300 users)',
-    users: 300,
-    watchSeconds: 30,
-    intervalMs: 500,
+    config: {
+      baseTraffic: { lambdaUsersPerSecond: 150 },
+      injection: { type: 'none' },
+      videoPool: [...DEFAULT_VIDEO_IDS],
+      zipfSkew: 1.1,
+    },
     duration_seconds: 120,
   },
   normal_500: {
     id: 'normal_500',
     name: 'Normal (500 users)',
-    users: 500,
-    watchSeconds: 30,
-    intervalMs: 500,
+    config: {
+      baseTraffic: { lambdaUsersPerSecond: 250 },
+      injection: { type: 'none' },
+      videoPool: [...DEFAULT_VIDEO_IDS],
+      zipfSkew: 1.1,
+    },
     duration_seconds: 120,
   },
   spike: {
     id: 'spike',
     name: 'Spike',
-    users: 500,
-    watchSeconds: 30,
-    intervalMs: 250,
+    config: {
+      baseTraffic: { lambdaUsersPerSecond: 50 },
+      injection: { type: 'viral_spike', totalUsers: 5000, durationMs: 5000 },
+      videoPool: [...DEFAULT_VIDEO_IDS],
+      zipfSkew: 1.2,
+    },
     duration_seconds: 180,
   },
   slowdown: {
     id: 'slowdown',
     name: 'Slowdown',
-    users: 300,
-    watchSeconds: 30,
-    intervalMs: 1000,
+    config: {
+      baseTraffic: { lambdaUsersPerSecond: 50 },
+      injection: { type: 'none' },
+      videoPool: [...DEFAULT_VIDEO_IDS],
+      zipfSkew: 1.1,
+    },
     duration_seconds: 120,
   },
   load_test: {
     id: 'load_test',
     name: 'Load Test (100→300→500→1000)',
-    users: 100,
-    watchSeconds: 30,
-    intervalMs: 500,
+    config: {
+      baseTraffic: { lambdaUsersPerSecond: 50 },
+      injection: { type: 'none' },
+      videoPool: [...DEFAULT_VIDEO_IDS],
+      zipfSkew: 1.1,
+    },
     duration_seconds: 600,
   },
 };
@@ -138,28 +185,25 @@ export class ScenarioRegistry {
     const t = TEMPLATES[templateId];
     if (!t) return undefined;
 
-    const videoId = t.targetVideoId ?? DEFAULT_VIDEO_IDS[0];
+    const nowMs = Date.now();
     const scenario: Scenario = {
       id: t.id,
       name: t.name,
       status: 'running',
-      config: {
-        users: t.users,
-        targetVideoId: videoId,
-        watchSeconds: t.watchSeconds,
-        intervalMs: t.intervalMs,
-      },
+      config: { ...t.config },
       stats: { emittedEvents: 0 },
       elapsedTicks: 0,
       activeUsers: 0,
-      rampUpTicks: defaultRampTicks(t.users),
-      playheads: new Map(),
+      sessions: new Map(),
+      userSeq: 0,
+      startedAtMs: nowMs,
     };
     this.scenarios.set(t.id, scenario);
     return scenario;
   }
 
   create(id: string, name: string, config: ScenarioConfig): Scenario {
+    const nowMs = Date.now();
     const scenario: Scenario = {
       id,
       name,
@@ -168,8 +212,9 @@ export class ScenarioRegistry {
       stats: { emittedEvents: 0 },
       elapsedTicks: 0,
       activeUsers: 0,
-      rampUpTicks: defaultRampTicks(config.users),
-      playheads: new Map(),
+      sessions: new Map(),
+      userSeq: 0,
+      startedAtMs: nowMs,
     };
     this.scenarios.set(id, scenario);
     return scenario;
@@ -207,7 +252,7 @@ export class ScenarioRegistry {
       s.config = { ...s.config, ...config };
       s.elapsedTicks = 0;
       s.activeUsers = 0;
-      s.rampUpTicks = defaultRampTicks(s.config.users);
+      s.startedAtMs = Date.now();
     }
   }
 

@@ -20,7 +20,8 @@ export interface BatchResult {
   errors: number;
 }
 
-const DEFAULT_API_URL = process.env.RANKING_API_URL ?? 'http://localhost:8080/v1/heartbeat';
+const DEFAULT_API_URL =
+  process.env.RANKING_API_URL ?? 'http://localhost:8080/v1/heartbeat';
 const CONCURRENCY = 50;
 
 @Injectable()

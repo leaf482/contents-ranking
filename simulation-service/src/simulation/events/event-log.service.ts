@@ -4,7 +4,13 @@
 
 import { Injectable } from '@nestjs/common';
 
-export type EventType = 'start' | 'stop' | 'pause' | 'resume' | 'spike' | 'load_spike';
+export type EventType =
+  | 'start'
+  | 'stop'
+  | 'pause'
+  | 'resume'
+  | 'spike'
+  | 'load_spike';
 
 export interface ScenarioEvent {
   type: EventType;

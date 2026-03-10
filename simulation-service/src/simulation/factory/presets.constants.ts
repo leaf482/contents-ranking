@@ -1,7 +1,10 @@
 /**
  * Scenario Presets - Predefined traffic patterns for the Simulation Factory.
- * Uses 1x real-time playback (playhead += intervalMs per heartbeat).
- * Worker threshold: 5s accumulated watch time = 1 ranking point (TEMP for fast testing).
+ * Note: the engine now simulates **user lifecycles** (arrive → watch → heartbeat → leave).
+ * Preset fields remain for UI compatibility, but the engine uses:
+ * - baseTraffic (Poisson arrivals/sec)
+ * - injection groups (e.g. hot_trending, viral_spike)
+ * - watch duration distribution + Zipf-like video selection
  */
 
 export interface ScenarioPreset {
@@ -71,7 +74,8 @@ export const SCENARIO_PRESETS: ScenarioPreset[] = [
   {
     id: 'noise_traffic',
     name: 'Noise Traffic',
-    description: 'Spam-like, 3s watch — Score does NOT increase (< 5s threshold)',
+    description:
+      'Spam-like, 3s watch — Score does NOT increase (< 5s threshold)',
     users: 1500,
     watchSeconds: 3,
     intervalMs: 500,

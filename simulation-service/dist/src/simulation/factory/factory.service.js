@@ -31,36 +31,79 @@ let FactoryService = class FactoryService {
     createAndStart(dto) {
         const scenarioId = `scenario-${Date.now().toString(36)}`;
         let users;
-        let watchSeconds;
-        let intervalMs;
         let durationSeconds;
         let name;
+        let presetId;
         if (dto.presetId) {
             const preset = (0, presets_constants_1.getPreset)(dto.presetId);
             if (!preset) {
                 throw new common_1.NotFoundException(`Preset '${dto.presetId}' not found`);
             }
             users = dto.users ?? preset.users;
-            watchSeconds = dto.watchSeconds ?? preset.watchSeconds;
-            intervalMs = dto.intervalMs ?? preset.intervalMs;
             durationSeconds = dto.durationSeconds ?? preset.durationSeconds;
-            name = (dto.name?.trim() || preset.name);
+            name = dto.name?.trim() || preset.name;
+            presetId = preset.id;
         }
         else {
             users = dto.users ?? 100;
-            watchSeconds = dto.watchSeconds ?? 30;
-            intervalMs = dto.intervalMs ?? 500;
             durationSeconds = dto.durationSeconds;
-            name = (dto.name?.trim() || `Scenario ${Date.now().toString(36)}`);
+            name = dto.name?.trim() || `Scenario ${Date.now().toString(36)}`;
         }
         const videoId = dto.targetVideoId ?? DEFAULT_VIDEO_IDS[0];
+        const videoPool = [
+            videoId,
+            ...DEFAULT_VIDEO_IDS.filter((v) => v !== videoId),
+        ];
+        const baseLambda = presetId && (presetId === 'hot_trending' || presetId === 'viral_spike')
+            ? 20
+            : Math.max(0, users);
         const config = {
-            users,
-            targetVideoId: videoId,
-            watchSeconds,
-            intervalMs,
+            baseTraffic: { lambdaUsersPerSecond: baseLambda },
+            injection: { type: 'none' },
+            videoPool,
+            zipfSkew: 1.2,
             durationTicks: durationSeconds ? durationSeconds * 10 : undefined,
         };
+        if (presetId === 'hot_trending') {
+            config.injection = {
+                type: 'hot_trending',
+                targetVideoId: videoId,
+                totalUsers: Math.max(0, users),
+                durationMs: 30_000,
+            };
+            config.watchDurationDistribution = [
+                { seconds: 3, weight: 15 },
+                { seconds: 10, weight: 30 },
+                { seconds: 30, weight: 35 },
+                { seconds: 60, weight: 20 },
+            ];
+        }
+        else if (presetId === 'viral_spike') {
+            config.injection = {
+                type: 'viral_spike',
+                targetVideoId: videoId,
+                totalUsers: Math.max(0, users),
+                durationMs: 5_000,
+            };
+            config.watchDurationDistribution = [
+                { seconds: 3, weight: 70 },
+                { seconds: 10, weight: 25 },
+                { seconds: 30, weight: 4 },
+                { seconds: 60, weight: 1 },
+            ];
+        }
+        else if (presetId === 'half_hot_trending' ||
+            presetId === 'noise_traffic') {
+            config.watchDurationDistribution = [{ seconds: 3, weight: 100 }];
+        }
+        else if (presetId === 'long_engagement') {
+            config.watchDurationDistribution = [
+                { seconds: 3, weight: 5 },
+                { seconds: 10, weight: 20 },
+                { seconds: 30, weight: 45 },
+                { seconds: 60, weight: 30 },
+            ];
+        }
         this.scheduler.enqueueStart(scenarioId, name, config);
         return {
             id: scenarioId,
@@ -70,7 +113,9 @@ let FactoryService = class FactoryService {
         };
     }
     listActive() {
-        const scenarios = this.registry.getAll().filter((s) => s.status !== 'stopped');
+        const scenarios = this.registry
+            .getAll()
+            .filter((s) => s.status !== 'stopped');
         return scenarios.map((s) => ({
             id: s.id,
             name: s.name,
@@ -107,7 +152,7 @@ let FactoryService = class FactoryService {
                 this.eventLog.record('stop', id);
                 return { id, action: 'stopped' };
             default:
-                throw new common_1.NotFoundException(`Unknown action: ${action}`);
+                throw new common_1.NotFoundException('Unknown action');
         }
     }
     getAttribution() {
@@ -131,7 +176,7 @@ let FactoryService = class FactoryService {
                 const s = this.registry.get(id);
                 if (!s)
                     return null;
-                const elapsedSec = (s.elapsedTicks * 0.1) || 1;
+                const elapsedSec = s.elapsedTicks * 0.1 || 1;
                 return {
                     scenarioId: id,
                     scenarioName: s.name,

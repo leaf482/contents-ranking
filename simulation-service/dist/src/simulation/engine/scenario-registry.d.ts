@@ -1,9 +1,20 @@
 export type ScenarioStatus = 'running' | 'paused' | 'stopped';
 export interface ScenarioConfig {
-    users: number;
-    targetVideoId: string;
-    watchSeconds: number;
-    intervalMs: number;
+    baseTraffic?: {
+        lambdaUsersPerSecond: number;
+    };
+    injection?: {
+        type: 'none' | 'hot_trending' | 'viral_spike';
+        targetVideoId?: string;
+        totalUsers?: number;
+        durationMs?: number;
+    };
+    videoPool: string[];
+    zipfSkew?: number;
+    watchDurationDistribution?: Array<{
+        seconds: number;
+        weight: number;
+    }>;
     durationTicks?: number;
 }
 export interface ScenarioStats {
@@ -17,18 +28,16 @@ export interface Scenario {
     stats: ScenarioStats;
     elapsedTicks: number;
     activeUsers: number;
-    rampUpTicks: number;
-    playheads: Map<string, number>;
+    sessions: Map<string, import('./user-session').UserSession>;
+    userSeq: number;
+    startedAtMs: number;
     loadMultiplier?: number;
     spikeEndMs?: number;
 }
 export interface ScenarioTemplate {
     id: string;
     name: string;
-    users: number;
-    targetVideoId?: string;
-    watchSeconds: number;
-    intervalMs: number;
+    config: ScenarioConfig;
     duration_seconds?: number;
 }
 export declare class ScenarioRegistry {

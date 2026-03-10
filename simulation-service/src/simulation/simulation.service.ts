@@ -1,5 +1,13 @@
-import { ConflictException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { SimulationScenario, SimulationStatus } from './interfaces/scenario.interface';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
+import {
+  SimulationScenario,
+  SimulationStatus,
+} from './interfaces/scenario.interface';
 import { ScenarioConfig } from './engine/scenario-registry';
 import {
   LOAD_TEST_PHASES,
@@ -14,11 +22,15 @@ const DEFAULT_VIDEO_IDS = Array.from({ length: 10 }, (_, i) => `video${i + 1}`);
 
 function toScenarioConfig(scenario: SimulationScenario): ScenarioConfig {
   const durationSec = scenario.duration_seconds;
+  const pool =
+    scenario.video_ids && scenario.video_ids.length > 0
+      ? [...scenario.video_ids]
+      : [...DEFAULT_VIDEO_IDS];
   return {
-    users: scenario.users,
-    targetVideoId: scenario.video_ids?.[0] ?? DEFAULT_VIDEO_IDS[0],
-    watchSeconds: scenario.watch_seconds ?? 30,
-    intervalMs: Math.round(1000 / Math.max(1, scenario.events_per_second ?? 2)),
+    baseTraffic: { lambdaUsersPerSecond: Math.max(0, scenario.users ?? 0) },
+    injection: { type: 'none' },
+    videoPool: pool,
+    zipfSkew: 1.1,
     durationTicks: durationSec ? durationSec * 10 : undefined,
   };
 }
@@ -75,13 +87,11 @@ export class SimulationService implements OnModuleInit {
       throw new ConflictException(`Scenario ${scenarioId} is already running`);
     }
 
-    const videoId = template.targetVideoId ?? DEFAULT_VIDEO_IDS[0];
     const config: ScenarioConfig = {
-      users: template.users,
-      targetVideoId: videoId,
-      watchSeconds: template.watchSeconds,
-      intervalMs: template.intervalMs,
-      durationTicks: template.duration_seconds ? template.duration_seconds * 10 : undefined,
+      ...template.config,
+      durationTicks: template.duration_seconds
+        ? template.duration_seconds * 10
+        : undefined,
     };
 
     this.scheduler.enqueueStart(scenarioId, template.name, config);
@@ -207,10 +217,15 @@ export class SimulationService implements OnModuleInit {
 
   injectSpike(users = 3000, durationSec = 5): void {
     this.scheduler.enqueueStart('spike-overlay', `Spike +${users}`, {
-      users,
-      targetVideoId: DEFAULT_VIDEO_IDS[0],
-      watchSeconds: 30,
-      intervalMs: 333,
+      baseTraffic: { lambdaUsersPerSecond: 0 },
+      injection: {
+        type: 'viral_spike',
+        targetVideoId: DEFAULT_VIDEO_IDS[0],
+        totalUsers: users,
+        durationMs: durationSec * 1000,
+      },
+      videoPool: [...DEFAULT_VIDEO_IDS],
+      zipfSkew: 1.2,
     });
     setTimeout(() => {
       this.scheduler.enqueueStop('spike-overlay');

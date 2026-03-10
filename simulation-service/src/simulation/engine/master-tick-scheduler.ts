@@ -13,14 +13,22 @@ import { AttributionIndex } from './attribution-index';
 import { BatchSender, HeartbeatPayload } from './batch-sender';
 import { EventLogService } from '../events/event-log.service';
 import { EventStreamService } from '../events/event-stream.service';
+import {
+  buildWatchDurationSampler,
+  buildZipfSelector,
+  samplePoisson,
+} from './sampling';
+import { createUserSession, type UserSession } from './user-session';
 
 const TICK_MS = 100;
-const DEFAULT_API_URL = process.env.RANKING_API_URL ?? 'http://localhost:8080/v1/heartbeat';
+const DEFAULT_API_URL =
+  process.env.RANKING_API_URL ?? 'http://localhost:8080/v1/heartbeat';
 
 @Injectable()
 export class MasterTickScheduler implements OnModuleDestroy {
   private readonly logger = new Logger(MasterTickScheduler.name);
   private intervalId: ReturnType<typeof setInterval> | null = null;
+  private lastTickAtMs = 0;
 
   constructor(
     private readonly registry: ScenarioRegistry,
@@ -37,7 +45,7 @@ export class MasterTickScheduler implements OnModuleDestroy {
 
   start(): void {
     if (this.intervalId) return;
-    this.intervalId = setInterval(() => this.tick(), TICK_MS);
+    this.intervalId = setInterval(() => void this.tick(), TICK_MS);
     this.logger.log('Master tick scheduler started (100ms period)');
   }
 
@@ -79,7 +87,11 @@ export class MasterTickScheduler implements OnModuleDestroy {
   }
 
   /** Apply spike to a specific scenario (multiplier x for durationMs) */
-  enqueueSpike(scenarioId: string, multiplier: number, durationMs: number): void {
+  enqueueSpike(
+    scenarioId: string,
+    multiplier: number,
+    durationMs: number,
+  ): void {
     const s = this.registry.get(scenarioId);
     if (s) this.registry.setSpike(scenarioId, multiplier, durationMs);
   }
@@ -96,19 +108,27 @@ export class MasterTickScheduler implements OnModuleDestroy {
           if (cmd.config && cmd.name) {
             const existing = this.registry.get(cmd.scenarioId);
             if (existing) {
-              this.attributionIndex.clearScenario(cmd.scenarioId, existing.config.targetVideoId);
+              // Clear old attribution if any
+              const oldTarget =
+                existing.config.injection?.targetVideoId ??
+                existing.config.videoPool?.[0];
+              if (oldTarget)
+                this.attributionIndex.clearScenario(cmd.scenarioId, oldTarget);
             }
-            const scenario = this.registry.create(cmd.scenarioId, cmd.name, cmd.config);
+            this.registry.create(cmd.scenarioId, cmd.name, cmd.config);
             if (cmd.initialStatus === 'paused') {
               this.registry.setStatus(cmd.scenarioId, 'paused');
             }
-            this.attributionIndex.setScenarioVideo(cmd.scenarioId, cmd.config.targetVideoId);
+            const target =
+              cmd.config.injection?.targetVideoId ?? cmd.config.videoPool?.[0];
+            if (target)
+              this.attributionIndex.setScenarioVideo(cmd.scenarioId, target);
             this.eventLog.record('start', cmd.scenarioId);
             const durationSeconds = cmd.config.durationTicks
               ? (cmd.config.durationTicks * TICK_MS) / 1000
               : undefined;
             this.logger.log(
-              `scenario started id=${cmd.scenarioId} name="${cmd.name}" users=${cmd.config.users} intervalMs=${cmd.config.intervalMs}` +
+              `scenario started id=${cmd.scenarioId} name="${cmd.name}" lambda=${cmd.config.baseTraffic?.lambdaUsersPerSecond ?? 0}` +
                 ` durationSec=${durationSeconds ?? '∞'}${cmd.initialStatus === 'paused' ? ' [paused]' : ''}`,
             );
           }
@@ -123,78 +143,209 @@ export class MasterTickScheduler implements OnModuleDestroy {
           this.eventLog.record('resume', cmd.scenarioId);
           this.logger.debug(`resumed ${cmd.scenarioId}`);
           break;
-        case 'stop':
+        case 'stop': {
           const s = this.registry.get(cmd.scenarioId);
           if (s) {
-            this.attributionIndex.clearScenario(cmd.scenarioId, s.config.targetVideoId);
+            const target =
+              s.config.injection?.targetVideoId ?? s.config.videoPool?.[0];
+            if (target)
+              this.attributionIndex.clearScenario(cmd.scenarioId, target);
             this.registry.setStatus(cmd.scenarioId, 'stopped');
             this.registry.remove(cmd.scenarioId);
             this.eventLog.record('stop', cmd.scenarioId);
             this.logger.log(`stopped ${cmd.scenarioId}`);
           }
           break;
-        case 'switch_phase':
+        }
+        case 'switch_phase': {
           if (cmd.config) {
             const existing = this.registry.get(cmd.scenarioId);
             if (existing) {
-              this.attributionIndex.clearScenario(cmd.scenarioId, existing.config.targetVideoId);
+              const oldTarget =
+                existing.config.injection?.targetVideoId ??
+                existing.config.videoPool?.[0];
+              if (oldTarget)
+                this.attributionIndex.clearScenario(cmd.scenarioId, oldTarget);
             }
             this.registry.updateConfig(cmd.scenarioId, cmd.config);
-            if (cmd.config.targetVideoId) {
-              this.attributionIndex.setScenarioVideo(cmd.scenarioId, cmd.config.targetVideoId);
-            }
-            this.logger.log(`switch_phase ${cmd.scenarioId} (${cmd.config.users} users)`);
+            const newTarget =
+              cmd.config.injection?.targetVideoId ?? cmd.config.videoPool?.[0];
+            if (newTarget)
+              this.attributionIndex.setScenarioVideo(cmd.scenarioId, newTarget);
+            this.logger.log(
+              `switch_phase ${cmd.scenarioId} (lambda=${cmd.config.baseTraffic?.lambdaUsersPerSecond ?? 0})`,
+            );
           }
           break;
+        }
       }
     }
   }
 
-  private computeEventsPerTick(scenario: Scenario): number {
-    const { intervalMs } = scenario.config;
-    const activeUsers = scenario.activeUsers;
-    if (activeUsers <= 0) return 0;
-    let events = Math.round((activeUsers * TICK_MS) / intervalMs);
-    if (scenario.loadMultiplier && scenario.spikeEndMs && Date.now() < scenario.spikeEndMs) {
-      events = Math.round(events * scenario.loadMultiplier);
-    } else if (scenario.spikeEndMs && Date.now() >= scenario.spikeEndMs) {
+  private isSpikeActive(scenario: Scenario, nowMs: number): boolean {
+    if (
+      scenario.loadMultiplier &&
+      scenario.spikeEndMs &&
+      nowMs < scenario.spikeEndMs
+    )
+      return true;
+    if (scenario.spikeEndMs && nowMs >= scenario.spikeEndMs) {
       scenario.loadMultiplier = undefined;
       scenario.spikeEndMs = undefined;
     }
-    return events;
+    return false;
   }
 
-  private buildPayloads(scenario: Scenario, count: number): HeartbeatPayload[] {
-    const { targetVideoId, watchSeconds, intervalMs } = scenario.config;
-    const maxPlayheadMs = watchSeconds * 1000;
-    const prefix = `${scenario.id}-`;
-    const payloads: HeartbeatPayload[] = [];
-    const now = Date.now();
+  private scenarioRng(): () => number {
+    // Deterministic-ish per process; sufficient for simulation
+    return Math.random;
+  }
 
+  private createSessionsForScenario(
+    scenario: Scenario,
+    count: number,
+    nowMs: number,
+    opts?: {
+      forceVideoId?: string;
+      watchDurationDistribution?: Array<{ seconds: number; weight: number }>;
+    },
+  ): UserSession[] {
+    if (count <= 0) return [];
+
+    const rng = this.scenarioRng();
+    const skew = scenario.config.zipfSkew ?? 1.1;
+    const pool = scenario.config.videoPool;
+    const selector = buildZipfSelector(rng, pool, skew);
+    const sampler = buildWatchDurationSampler(
+      rng,
+      opts?.watchDurationDistribution ??
+        scenario.config.watchDurationDistribution,
+    );
+
+    const sessions: UserSession[] = [];
     for (let i = 0; i < count; i++) {
-      const userIdx = i % scenario.activeUsers;
-      const userId = `${prefix}user-${userIdx + 1}`;
-      const prev = scenario.playheads.get(userId) ?? 0;
-
-      // User has reached total watch time - stop sending events (1x real-time sync)
-      if (prev >= maxPlayheadMs) continue;
-
-      // 1x speed: playhead advances by actual elapsed time (intervalMs between heartbeats)
-      const next = Math.min(prev + intervalMs, maxPlayheadMs);
-      scenario.playheads.set(userId, next);
-
-      payloads.push({
-        session_id: `sim-${userId}`,
-        user_id: userId,
-        video_id: targetVideoId,
-        playhead: next,
-        timestamp: now,
-      });
+      const userId = `${scenario.id}-u${++scenario.userSeq}`;
+      const videoId = opts?.forceVideoId ?? selector.pick();
+      const watchDurationMs = sampler.sample();
+      sessions.push(
+        createUserSession({
+          userId,
+          videoId,
+          watchDurationMs,
+          nowMs,
+          sessionPrefix: 'sim',
+        }),
+      );
     }
+    return sessions;
+  }
+
+  private generateArrivals(scenario: Scenario, nowMs: number): UserSession[] {
+    const rng = this.scenarioRng();
+    const spikeActive = this.isSpikeActive(scenario, nowMs);
+    const multiplier = spikeActive ? (scenario.loadMultiplier ?? 1) : 1;
+
+    const baseLambda =
+      (scenario.config.baseTraffic?.lambdaUsersPerSecond ?? 0) * multiplier;
+    const baseArrivals = samplePoisson(rng, baseLambda);
+
+    let injectedArrivals = 0;
+    const inj = scenario.config.injection;
+    const sinceStartMs = nowMs - scenario.startedAtMs;
+
+    if (inj && inj.type !== 'none') {
+      const durationMs = Math.max(0, inj.durationMs ?? 0);
+      const totalUsers = Math.max(0, inj.totalUsers ?? 0);
+      if (
+        durationMs > 0 &&
+        totalUsers > 0 &&
+        sinceStartMs >= 0 &&
+        sinceStartMs < durationMs
+      ) {
+        const lambda = (totalUsers / (durationMs / 1000)) * multiplier;
+        injectedArrivals = samplePoisson(rng, lambda);
+      }
+    }
+
+    const sessions: UserSession[] = [];
+
+    // Base traffic sessions
+    sessions.push(
+      ...this.createSessionsForScenario(scenario, baseArrivals, nowMs),
+    );
+
+    // Injection sessions (scenario-specific biases)
+    if (injectedArrivals > 0 && inj) {
+      if (inj.type === 'hot_trending') {
+        sessions.push(
+          ...this.createSessionsForScenario(scenario, injectedArrivals, nowMs, {
+            forceVideoId: inj.targetVideoId,
+            watchDurationDistribution: [
+              { seconds: 3, weight: 20 },
+              { seconds: 10, weight: 30 },
+              { seconds: 30, weight: 30 },
+              { seconds: 60, weight: 20 },
+            ],
+          }),
+        );
+      } else if (inj.type === 'viral_spike') {
+        sessions.push(
+          ...this.createSessionsForScenario(scenario, injectedArrivals, nowMs, {
+            forceVideoId: inj.targetVideoId,
+            watchDurationDistribution: [
+              { seconds: 3, weight: 70 },
+              { seconds: 10, weight: 25 },
+              { seconds: 30, weight: 4 },
+              { seconds: 60, weight: 1 },
+            ],
+          }),
+        );
+      }
+    }
+
+    return sessions;
+  }
+
+  private updateSessionsAndBuildHeartbeats(
+    scenario: Scenario,
+    nowMs: number,
+    elapsedMs: number,
+  ): HeartbeatPayload[] {
+    const payloads: HeartbeatPayload[] = [];
+    const toDelete: string[] = [];
+
+    for (const [userId, session] of scenario.sessions) {
+      const nextPlayhead = session.playheadMs + elapsedMs;
+      session.playheadMs = nextPlayhead;
+      session.lastHeartbeatAt = nowMs;
+
+      if (session.playheadMs < session.watchDurationMs) {
+        payloads.push({
+          session_id: session.sessionId,
+          user_id: session.userId,
+          video_id: session.videoId,
+          playhead: session.playheadMs,
+          timestamp: nowMs,
+        });
+      } else {
+        // One last heartbeat at completion is optional; keep it simple and end session.
+        toDelete.push(userId);
+      }
+    }
+
+    for (const userId of toDelete) {
+      scenario.sessions.delete(userId);
+    }
+    scenario.activeUsers = scenario.sessions.size;
     return payloads;
   }
 
   private async tick(): Promise<void> {
+    const nowMs = Date.now();
+    if (this.lastTickAtMs === 0) this.lastTickAtMs = nowMs;
+    const elapsedMs = Math.max(0, Math.min(nowMs - this.lastTickAtMs, 1000));
+    this.lastTickAtMs = nowMs;
+
     const commands = this.commandQueue.drain();
     if (commands.length > 0) {
       this.applyCommands(commands);
@@ -209,25 +360,34 @@ export class MasterTickScheduler implements OnModuleDestroy {
     for (const scenario of running) {
       scenario.elapsedTicks++;
 
-      if (scenario.config.durationTicks && scenario.elapsedTicks >= scenario.config.durationTicks) {
-        this.attributionIndex.clearScenario(scenario.id, scenario.config.targetVideoId);
+      if (
+        scenario.config.durationTicks &&
+        scenario.elapsedTicks >= scenario.config.durationTicks
+      ) {
+        const target =
+          scenario.config.injection?.targetVideoId ??
+          scenario.config.videoPool?.[0];
+        if (target) this.attributionIndex.clearScenario(scenario.id, target);
         this.registry.remove(scenario.id);
         this.logger.log(`scenario ${scenario.id} duration reached, stopped`);
         continue;
       }
 
-      if (scenario.elapsedTicks < scenario.rampUpTicks) {
-        scenario.activeUsers = Math.min(
-          scenario.activeUsers + Math.max(1, Math.floor(scenario.config.users / scenario.rampUpTicks)),
-          scenario.config.users,
-        );
-      } else {
-        scenario.activeUsers = scenario.config.users;
+      // 1) Generate new users (base traffic + injection) on 1-second boundaries (10 ticks).
+      if (scenario.elapsedTicks % 10 === 0) {
+        const arrivals = this.generateArrivals(scenario, nowMs);
+        for (const sess of arrivals) {
+          scenario.sessions.set(sess.userId, sess);
+        }
       }
 
-      const eventsCount = this.computeEventsPerTick(scenario);
-      if (eventsCount > 0) {
-        const payloads = this.buildPayloads(scenario, eventsCount);
+      // 2) Update sessions and emit heartbeats for active sessions
+      const payloads = this.updateSessionsAndBuildHeartbeats(
+        scenario,
+        nowMs,
+        elapsedMs,
+      );
+      if (payloads.length > 0) {
         allPayloads.push(...payloads);
         countsPerScenario.set(scenario.id, payloads.length);
       }
@@ -237,7 +397,10 @@ export class MasterTickScheduler implements OnModuleDestroy {
       this.eventStream.pushBatch(
         allPayloads.map((p) => ({ user_id: p.user_id, video_id: p.video_id })),
       );
-      const { sent } = await this.batchSender.sendBatch(allPayloads, DEFAULT_API_URL);
+      const { sent } = await this.batchSender.sendBatch(
+        allPayloads,
+        DEFAULT_API_URL,
+      );
       const ratio = sent / allPayloads.length;
       for (const [id, count] of countsPerScenario) {
         const s = this.registry.get(id);

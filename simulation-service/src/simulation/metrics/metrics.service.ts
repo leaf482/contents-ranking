@@ -51,29 +51,41 @@ export class MetricsService {
         processingSumRate,
         totalPoints,
       ] = await Promise.all([
-        this.queryPrometheus('sum(rate(api_requests_total{path="/v1/heartbeat"}[1m]))'),
+        this.queryPrometheus(
+          'sum(rate(api_requests_total{path="/v1/heartbeat"}[1m]))',
+        ),
         this.queryPrometheus('sum(rate(worker_events_processed_total[1m]))'),
         this.queryPrometheus('sum(kafka_consumergroup_lag_sum)').catch(() =>
           this.queryPrometheus('sum(kafka_consumergroup_lag)'),
         ),
         this.queryPrometheus('sum(rate(worker_events_processed_total[1m]))'),
-        this.queryPrometheus('sum(rate(worker_processing_duration_seconds_count[1m]))'),
-        this.queryPrometheus('sum(rate(worker_processing_duration_seconds_sum[1m]))'),
+        this.queryPrometheus(
+          'sum(rate(worker_processing_duration_seconds_count[1m]))',
+        ),
+        this.queryPrometheus(
+          'sum(rate(worker_processing_duration_seconds_sum[1m]))',
+        ),
         this.queryPrometheus('sum(worker_ranking_updates_total)'),
       ]);
 
-      const events = this.eventLog.getEvents(5 * 60 * 1000).map((e: ScenarioEvent) => ({
-        type: e.type,
-        scenarioId: e.scenarioId,
-        timestamp: e.timestamp,
-      }));
+      const events = this.eventLog
+        .getEvents(5 * 60 * 1000)
+        .map((e: ScenarioEvent) => ({
+          type: e.type,
+          scenarioId: e.scenarioId,
+          timestamp: e.timestamp,
+        }));
 
       const batchLoadAvg = batchCountRate > 0 ? eventsRate / batchCountRate : 0;
       const processingTimeMs =
         batchCountRate > 0 ? (processingSumRate / batchCountRate) * 1000 : 0;
 
       const workerStatus: 'healthy' | 'processing' | 'idle' =
-        workerThroughput > 0 ? 'processing' : rps > 0 || consumerLag > 0 ? 'idle' : 'healthy';
+        workerThroughput > 0
+          ? 'processing'
+          : rps > 0 || consumerLag > 0
+            ? 'idle'
+            : 'healthy';
 
       const summary: MetricsSummary = {
         rps: Math.round(rps * 100) / 100,
@@ -94,17 +106,21 @@ export class MetricsService {
       this.cacheExpiry = now + CACHE_TTL_MS;
       return summary;
     } catch (err) {
-      this.logger.warn(`Prometheus query failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(
+        `Prometheus query failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return {
         rps: 0,
         workerThroughput: 0,
         consumerLag: 0,
         fetchedAt: now,
-        events: this.eventLog.getEvents(5 * 60 * 1000).map((e: ScenarioEvent) => ({
-          type: e.type,
-          scenarioId: e.scenarioId,
-          timestamp: e.timestamp,
-        })),
+        events: this.eventLog
+          .getEvents(5 * 60 * 1000)
+          .map((e: ScenarioEvent) => ({
+            type: e.type,
+            scenarioId: e.scenarioId,
+            timestamp: e.timestamp,
+          })),
         workerMetrics: {
           batchLoadAvg: 0,
           batchLoadMax: 50,

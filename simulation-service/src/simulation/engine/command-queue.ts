@@ -5,7 +5,12 @@
 
 import type { ScenarioConfig, ScenarioStatus } from './scenario-registry';
 
-export type CommandType = 'start' | 'pause' | 'resume' | 'stop' | 'switch_phase';
+export type CommandType =
+  | 'start'
+  | 'pause'
+  | 'resume'
+  | 'stop'
+  | 'switch_phase';
 
 export interface QueuedCommand {
   scenarioId: string;

@@ -5,10 +5,7 @@ import { AppService } from './app.service';
 import { SimulationModule } from './simulation/simulation.module';
 
 @Module({
-  imports: [
-    PrometheusModule.register(),
-    SimulationModule,
-  ],
+  imports: [PrometheusModule.register(), SimulationModule],
   controllers: [AppController],
   providers: [AppService],
 })

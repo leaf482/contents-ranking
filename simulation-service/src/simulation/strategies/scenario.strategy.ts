@@ -51,7 +51,9 @@ export class ScenarioStrategy {
             activeUsers + usersPerRampStep,
             scenario.users,
           );
-          this.logger.debug(`ramp-up: ${activeUsers}/${scenario.users} users active`);
+          this.logger.debug(
+            `ramp-up: ${activeUsers}/${scenario.users} users active`,
+          );
         } else {
           activeUsers = scenario.users;
         }

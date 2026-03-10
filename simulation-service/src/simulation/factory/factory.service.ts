@@ -22,10 +22,9 @@ export class FactoryService {
     const scenarioId = `scenario-${Date.now().toString(36)}`;
 
     let users: number;
-    let watchSeconds: number;
-    let intervalMs: number;
     let durationSeconds: number | undefined;
     let name: string;
+    let presetId: string | undefined;
 
     if (dto.presetId) {
       const preset = getPreset(dto.presetId);
@@ -33,27 +32,78 @@ export class FactoryService {
         throw new NotFoundException(`Preset '${dto.presetId}' not found`);
       }
       users = dto.users ?? preset.users;
-      watchSeconds = dto.watchSeconds ?? preset.watchSeconds;
-      intervalMs = dto.intervalMs ?? preset.intervalMs;
       durationSeconds = dto.durationSeconds ?? preset.durationSeconds;
-      name = (dto.name?.trim() || preset.name);
+      name = dto.name?.trim() || preset.name;
+      presetId = preset.id;
     } else {
       users = dto.users ?? 100;
-      watchSeconds = dto.watchSeconds ?? 30;
-      intervalMs = dto.intervalMs ?? 500;
       durationSeconds = dto.durationSeconds;
-      name = (dto.name?.trim() || `Scenario ${Date.now().toString(36)}`);
+      name = dto.name?.trim() || `Scenario ${Date.now().toString(36)}`;
     }
 
     const videoId = dto.targetVideoId ?? DEFAULT_VIDEO_IDS[0];
+    const videoPool = [
+      videoId,
+      ...DEFAULT_VIDEO_IDS.filter((v) => v !== videoId),
+    ];
+
+    // Base traffic: interpret `users` as lambdaUsersPerSecond for non-injection presets.
+    // For injection presets, `users` is totalUsers injected over the injection window.
+    const baseLambda =
+      presetId && (presetId === 'hot_trending' || presetId === 'viral_spike')
+        ? 20
+        : Math.max(0, users);
 
     const config: ScenarioConfig = {
-      users,
-      targetVideoId: videoId,
-      watchSeconds,
-      intervalMs,
+      baseTraffic: { lambdaUsersPerSecond: baseLambda },
+      injection: { type: 'none' },
+      videoPool,
+      zipfSkew: 1.2,
       durationTicks: durationSeconds ? durationSeconds * 10 : undefined,
     };
+
+    // Scenario injections (special user groups)
+    if (presetId === 'hot_trending') {
+      config.injection = {
+        type: 'hot_trending',
+        targetVideoId: videoId,
+        totalUsers: Math.max(0, users),
+        durationMs: 30_000,
+      };
+      config.watchDurationDistribution = [
+        { seconds: 3, weight: 15 },
+        { seconds: 10, weight: 30 },
+        { seconds: 30, weight: 35 },
+        { seconds: 60, weight: 20 },
+      ];
+    } else if (presetId === 'viral_spike') {
+      config.injection = {
+        type: 'viral_spike',
+        targetVideoId: videoId,
+        totalUsers: Math.max(0, users),
+        durationMs: 5_000,
+      };
+      // Mostly short watch times
+      config.watchDurationDistribution = [
+        { seconds: 3, weight: 70 },
+        { seconds: 10, weight: 25 },
+        { seconds: 30, weight: 4 },
+        { seconds: 60, weight: 1 },
+      ];
+    } else if (
+      presetId === 'half_hot_trending' ||
+      presetId === 'noise_traffic'
+    ) {
+      // Noise: keep watch times short so ranking stays mostly unaffected
+      config.watchDurationDistribution = [{ seconds: 3, weight: 100 }];
+    } else if (presetId === 'long_engagement') {
+      config.watchDurationDistribution = [
+        { seconds: 3, weight: 5 },
+        { seconds: 10, weight: 20 },
+        { seconds: 30, weight: 45 },
+        { seconds: 60, weight: 30 },
+      ];
+    }
 
     this.scheduler.enqueueStart(scenarioId, name, config);
 
@@ -66,7 +116,9 @@ export class FactoryService {
   }
 
   listActive() {
-    const scenarios = this.registry.getAll().filter((s) => s.status !== 'stopped');
+    const scenarios = this.registry
+      .getAll()
+      .filter((s) => s.status !== 'stopped');
     return scenarios.map((s) => ({
       id: s.id,
       name: s.name,
@@ -95,7 +147,9 @@ export class FactoryService {
         return { id, action: 'resumed' };
       case 'spike':
         if (scenario.status !== 'running') {
-          throw new NotFoundException(`Spike only applies to running scenarios (${id} is ${scenario.status})`);
+          throw new NotFoundException(
+            `Spike only applies to running scenarios (${id} is ${scenario.status})`,
+          );
         }
         this.scheduler.enqueueSpike(id, 5, 5000);
         this.eventLog.record('spike', id);
@@ -105,7 +159,7 @@ export class FactoryService {
         this.eventLog.record('stop', id);
         return { id, action: 'stopped' };
       default:
-        throw new NotFoundException(`Unknown action: ${action}`);
+        throw new NotFoundException('Unknown action');
     }
   }
 
@@ -148,7 +202,7 @@ export class FactoryService {
         .map((id) => {
           const s = this.registry.get(id);
           if (!s) return null;
-          const elapsedSec = (s.elapsedTicks * 0.1) || 1;
+          const elapsedSec = s.elapsedTicks * 0.1 || 1;
           return {
             scenarioId: id,
             scenarioName: s.name,

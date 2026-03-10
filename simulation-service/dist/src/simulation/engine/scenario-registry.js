@@ -1,58 +1,83 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ScenarioRegistry = void 0;
-const DEFAULT_RAMP_TICKS = 100;
-function defaultRampTicks(users) {
-    return Math.max(10, Math.min(100, Math.floor(users / 5)));
-}
-const DEFAULT_VIDEO_IDS = Array.from({ length: 10 }, (_, i) => `video${i + 1}`);
+const DEFAULT_VIDEO_IDS = [
+    'MrBeast Challenge',
+    'Street Interview',
+    "Life Hack: Don't",
+    'GRWM for Prom',
+    'Golden Retriever',
+    'Restocking My Fridge',
+    'Day in my Life',
+    "POV: You're Late",
+    'I Won 10,000$',
+    'Is it Cake?',
+];
 const TEMPLATES = {
     normal: {
         id: 'normal',
         name: 'Normal',
-        users: 100,
-        watchSeconds: 30,
-        intervalMs: 500,
+        config: {
+            baseTraffic: { lambdaUsersPerSecond: 50 },
+            injection: { type: 'none' },
+            videoPool: [...DEFAULT_VIDEO_IDS],
+            zipfSkew: 1.1,
+        },
         duration_seconds: 120,
     },
     normal_300: {
         id: 'normal_300',
         name: 'Normal (300 users)',
-        users: 300,
-        watchSeconds: 30,
-        intervalMs: 500,
+        config: {
+            baseTraffic: { lambdaUsersPerSecond: 150 },
+            injection: { type: 'none' },
+            videoPool: [...DEFAULT_VIDEO_IDS],
+            zipfSkew: 1.1,
+        },
         duration_seconds: 120,
     },
     normal_500: {
         id: 'normal_500',
         name: 'Normal (500 users)',
-        users: 500,
-        watchSeconds: 30,
-        intervalMs: 500,
+        config: {
+            baseTraffic: { lambdaUsersPerSecond: 250 },
+            injection: { type: 'none' },
+            videoPool: [...DEFAULT_VIDEO_IDS],
+            zipfSkew: 1.1,
+        },
         duration_seconds: 120,
     },
     spike: {
         id: 'spike',
         name: 'Spike',
-        users: 500,
-        watchSeconds: 30,
-        intervalMs: 250,
+        config: {
+            baseTraffic: { lambdaUsersPerSecond: 50 },
+            injection: { type: 'viral_spike', totalUsers: 5000, durationMs: 5000 },
+            videoPool: [...DEFAULT_VIDEO_IDS],
+            zipfSkew: 1.2,
+        },
         duration_seconds: 180,
     },
     slowdown: {
         id: 'slowdown',
         name: 'Slowdown',
-        users: 300,
-        watchSeconds: 30,
-        intervalMs: 1000,
+        config: {
+            baseTraffic: { lambdaUsersPerSecond: 50 },
+            injection: { type: 'none' },
+            videoPool: [...DEFAULT_VIDEO_IDS],
+            zipfSkew: 1.1,
+        },
         duration_seconds: 120,
     },
     load_test: {
         id: 'load_test',
         name: 'Load Test (100→300→500→1000)',
-        users: 100,
-        watchSeconds: 30,
-        intervalMs: 500,
+        config: {
+            baseTraffic: { lambdaUsersPerSecond: 50 },
+            injection: { type: 'none' },
+            videoPool: [...DEFAULT_VIDEO_IDS],
+            zipfSkew: 1.1,
+        },
         duration_seconds: 600,
     },
 };
@@ -74,27 +99,24 @@ class ScenarioRegistry {
         const t = TEMPLATES[templateId];
         if (!t)
             return undefined;
-        const videoId = t.targetVideoId ?? DEFAULT_VIDEO_IDS[0];
+        const nowMs = Date.now();
         const scenario = {
             id: t.id,
             name: t.name,
             status: 'running',
-            config: {
-                users: t.users,
-                targetVideoId: videoId,
-                watchSeconds: t.watchSeconds,
-                intervalMs: t.intervalMs,
-            },
+            config: { ...t.config },
             stats: { emittedEvents: 0 },
             elapsedTicks: 0,
             activeUsers: 0,
-            rampUpTicks: defaultRampTicks(t.users),
-            playheads: new Map(),
+            sessions: new Map(),
+            userSeq: 0,
+            startedAtMs: nowMs,
         };
         this.scenarios.set(t.id, scenario);
         return scenario;
     }
     create(id, name, config) {
+        const nowMs = Date.now();
         const scenario = {
             id,
             name,
@@ -103,8 +125,9 @@ class ScenarioRegistry {
             stats: { emittedEvents: 0 },
             elapsedTicks: 0,
             activeUsers: 0,
-            rampUpTicks: defaultRampTicks(config.users),
-            playheads: new Map(),
+            sessions: new Map(),
+            userSeq: 0,
+            startedAtMs: nowMs,
         };
         this.scenarios.set(id, scenario);
         return scenario;
@@ -136,7 +159,7 @@ class ScenarioRegistry {
             s.config = { ...s.config, ...config };
             s.elapsedTicks = 0;
             s.activeUsers = 0;
-            s.rampUpTicks = defaultRampTicks(s.config.users);
+            s.startedAtMs = Date.now();
         }
     }
     recordEmitted(id, count) {

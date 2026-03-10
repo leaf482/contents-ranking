@@ -38,14 +38,20 @@ let MetricsService = MetricsService_1 = class MetricsService {
                 this.queryPrometheus('sum(rate(worker_processing_duration_seconds_sum[1m]))'),
                 this.queryPrometheus('sum(worker_ranking_updates_total)'),
             ]);
-            const events = this.eventLog.getEvents(5 * 60 * 1000).map((e) => ({
+            const events = this.eventLog
+                .getEvents(5 * 60 * 1000)
+                .map((e) => ({
                 type: e.type,
                 scenarioId: e.scenarioId,
                 timestamp: e.timestamp,
             }));
             const batchLoadAvg = batchCountRate > 0 ? eventsRate / batchCountRate : 0;
             const processingTimeMs = batchCountRate > 0 ? (processingSumRate / batchCountRate) * 1000 : 0;
-            const workerStatus = workerThroughput > 0 ? 'processing' : rps > 0 || consumerLag > 0 ? 'idle' : 'healthy';
+            const workerStatus = workerThroughput > 0
+                ? 'processing'
+                : rps > 0 || consumerLag > 0
+                    ? 'idle'
+                    : 'healthy';
             const summary = {
                 rps: Math.round(rps * 100) / 100,
                 workerThroughput: Math.round(workerThroughput * 100) / 100,
@@ -71,7 +77,9 @@ let MetricsService = MetricsService_1 = class MetricsService {
                 workerThroughput: 0,
                 consumerLag: 0,
                 fetchedAt: now,
-                events: this.eventLog.getEvents(5 * 60 * 1000).map((e) => ({
+                events: this.eventLog
+                    .getEvents(5 * 60 * 1000)
+                    .map((e) => ({
                     type: e.type,
                     scenarioId: e.scenarioId,
                     timestamp: e.timestamp,

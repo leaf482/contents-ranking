@@ -23,7 +23,8 @@ export class ChaosService {
     return {
       workerId,
       status: 'paused',
-      message: 'Worker is logically paused. Resume via worker API when implemented.',
+      message:
+        'Worker is logically paused. Resume via worker API when implemented.',
     };
   }
 
@@ -42,9 +43,14 @@ export class ChaosService {
   }
 
   triggerLoadSpike() {
-    this.scheduler.enqueueLoadSpike(LOAD_SPIKE_MULTIPLIER, LOAD_SPIKE_DURATION_MS);
+    this.scheduler.enqueueLoadSpike(
+      LOAD_SPIKE_MULTIPLIER,
+      LOAD_SPIKE_DURATION_MS,
+    );
     this.eventLog.record('load_spike');
-    this.logger.log(`load spike: ${LOAD_SPIKE_MULTIPLIER}x for ${LOAD_SPIKE_DURATION_MS}ms`);
+    this.logger.log(
+      `load spike: ${LOAD_SPIKE_MULTIPLIER}x for ${LOAD_SPIKE_DURATION_MS}ms`,
+    );
     return {
       message: `Load spike applied: ${LOAD_SPIKE_MULTIPLIER}x for 5 seconds`,
       multiplier: LOAD_SPIKE_MULTIPLIER,

@@ -15,6 +15,7 @@ export declare class MasterTickScheduler implements OnModuleDestroy {
     private readonly eventStream;
     private readonly logger;
     private intervalId;
+    private lastTickAtMs;
     constructor(registry: ScenarioRegistry, commandQueue: CommandQueue, attributionIndex: AttributionIndex, batchSender: BatchSender, eventLog: EventLogService, eventStream: EventStreamService);
     onModuleDestroy(): void;
     start(): void;
@@ -27,8 +28,11 @@ export declare class MasterTickScheduler implements OnModuleDestroy {
     enqueueSpike(scenarioId: string, multiplier: number, durationMs: number): void;
     enqueueLoadSpike(multiplier: number, durationMs: number): void;
     private applyCommands;
-    private computeEventsPerTick;
-    private buildPayloads;
+    private isSpikeActive;
+    private scenarioRng;
+    private createSessionsForScenario;
+    private generateArrivals;
+    private updateSessionsAndBuildHeartbeats;
     private tick;
     getRegistry(): ScenarioRegistry;
 }
