@@ -13,6 +13,7 @@ import (
 const (
 	globalRankingKey   = "ranking:global"
 	trendingRankingKey = "ranking:trending"
+	velocityKeyPattern = "ranking:velocity:*"
 )
 
 var defaultVideoIDs = []string{
@@ -82,4 +83,67 @@ func (r *RankingRepo) GetTopTrending(ctx context.Context, limit int64) ([]models
 		}
 	}
 	return items, nil
+}
+
+// GetGlobalScores returns ranking:global scores for the given video IDs.
+// Missing members return score 0.
+func (r *RankingRepo) GetGlobalScores(ctx context.Context, videoIDs []string) (map[string]float64, error) {
+	out := make(map[string]float64, len(videoIDs))
+	if len(videoIDs) == 0 {
+		return out, nil
+	}
+
+	pipe := r.rdb.Pipeline()
+	cmds := make([]*redis.FloatCmd, 0, len(videoIDs))
+	for _, id := range videoIDs {
+		cmds = append(cmds, pipe.ZScore(ctx, globalRankingKey, id))
+	}
+
+	_, err := pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		return nil, fmt.Errorf("repository: pipeline ZSCORE %s: %w", globalRankingKey, err)
+	}
+
+	for i, id := range videoIDs {
+		score, sErr := cmds[i].Result()
+		if sErr == redis.Nil {
+			out[id] = 0
+			continue
+		}
+		if sErr != nil {
+			return nil, fmt.Errorf("repository: ZSCORE %s (%s): %w", globalRankingKey, id, sErr)
+		}
+		out[id] = score
+	}
+
+	return out, nil
+}
+
+// GetRankingStats returns counts for global/trending leaderboards plus the number
+// of velocity keys present (ranking:velocity:*). Timestamp is filled by handler.
+func (r *RankingRepo) GetRankingStats(ctx context.Context) (globalVideos, trendingVideos, velocityKeys int64, err error) {
+	globalVideos, err = r.rdb.ZCard(ctx, globalRankingKey).Result()
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("repository: ZCARD %s: %w", globalRankingKey, err)
+	}
+
+	trendingVideos, err = r.rdb.ZCard(ctx, trendingRankingKey).Result()
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("repository: ZCARD %s: %w", trendingRankingKey, err)
+	}
+
+	var cursor uint64
+	for {
+		keys, next, scanErr := r.rdb.Scan(ctx, cursor, velocityKeyPattern, 1000).Result()
+		if scanErr != nil {
+			return 0, 0, 0, fmt.Errorf("repository: SCAN %s: %w", velocityKeyPattern, scanErr)
+		}
+		velocityKeys += int64(len(keys))
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+
+	return globalVideos, trendingVideos, velocityKeys, nil
 }

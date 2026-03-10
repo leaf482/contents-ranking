@@ -46,6 +46,13 @@ export interface ScenarioConfig {
    */
   videoPool: string[];
 
+  /**
+   * Optional explicit popularity weights for videos.
+   * When provided (non-empty), this overrides Zipf selection and uses
+   * weighted random choice across these entries.
+   */
+  videoPopularity?: Array<{ videoId: string; weight: number }>;
+
   /** Zipf skew for weighted video selection. Higher = more head-heavy. */
   zipfSkew?: number;
 

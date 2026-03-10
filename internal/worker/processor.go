@@ -80,7 +80,10 @@ if delta > 0 then
         local member = tostring(now_ms) .. '-' .. tostring(seq)
 
         redis.call('ZADD', velocity_key, now_ms, member)
-        redis.call('ZREMRANGEBYSCORE', velocity_key, 0, now_ms - window_ms)
+        -- Trim the sliding window periodically to reduce write amplification.
+        if (seq % 10) == 0 then
+            redis.call('ZREMRANGEBYSCORE', velocity_key, 0, now_ms - window_ms)
+        end
         local velocity = redis.call('ZCARD', velocity_key)
         redis.call('ZADD', trending_key, velocity, ARGV[1])
         -- TTL so inactive velocity keys are removed and do not leak memory

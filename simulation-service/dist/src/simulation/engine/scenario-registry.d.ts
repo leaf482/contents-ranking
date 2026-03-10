@@ -12,6 +12,10 @@ export interface ScenarioConfig {
         durationMs?: number;
     };
     videoPool: string[];
+    videoPopularity?: Array<{
+        videoId: string;
+        weight: number;
+    }>;
     zipfSkew?: number;
     watchDurationDistribution?: Array<{
         seconds: number;

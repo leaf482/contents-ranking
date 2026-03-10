@@ -3,9 +3,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ScenarioRegistry = void 0;
 function normalizeScenarioConfig(config) {
     return {
+        ...config,
         heartbeatIntervalMs: config.heartbeatIntervalMs ?? 500,
         maxConcurrentSessions: config.maxConcurrentSessions ?? 20_000,
-        ...config,
     };
 }
 const DEFAULT_VIDEO_IDS = [

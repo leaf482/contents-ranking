@@ -61,6 +61,7 @@ func main() {
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/v1/heartbeat", instrument("/v1/heartbeat", h.HandleHeartbeat))
 	mux.HandleFunc("/v1/ranking", instrument("/v1/ranking", rh.HandleGetRanking))
+	mux.HandleFunc("/v1/ranking/stats", instrument("/v1/ranking/stats", rh.HandleGetRankingStats))
 	// Backwards-compatible trending endpoints:
 	mux.HandleFunc("/v1/trending", instrument("/v1/trending", rh.HandleGetTrending))
 	mux.HandleFunc("/v1/ranking/trending", instrument("/v1/ranking/trending", rh.HandleGetTrending))

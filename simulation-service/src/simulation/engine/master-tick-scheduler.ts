@@ -17,6 +17,7 @@ import {
   buildWatchDurationSampler,
   buildZipfSelector,
   samplePoisson,
+  sampleWeighted,
 } from './sampling';
 import { createUserSession, type UserSession } from './user-session';
 
@@ -215,7 +216,17 @@ export class MasterTickScheduler implements OnModuleDestroy {
     const rng = this.scenarioRng();
     const skew = scenario.config.zipfSkew ?? 1.1;
     const pool = scenario.config.videoPool;
-    const selector = buildZipfSelector(rng, pool, skew);
+    const popularity = scenario.config.videoPopularity;
+    const selector =
+      popularity && popularity.length > 0
+        ? {
+            pick: () =>
+              sampleWeighted(
+                rng,
+                popularity.map((p) => ({ value: p.videoId, weight: p.weight })),
+              ),
+          }
+        : buildZipfSelector(rng, pool, skew);
     const sampler = buildWatchDurationSampler(
       rng,
       opts?.watchDurationDistribution ??

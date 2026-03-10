@@ -178,7 +178,12 @@ let MasterTickScheduler = MasterTickScheduler_1 = class MasterTickScheduler {
         const rng = this.scenarioRng();
         const skew = scenario.config.zipfSkew ?? 1.1;
         const pool = scenario.config.videoPool;
-        const selector = (0, sampling_1.buildZipfSelector)(rng, pool, skew);
+        const popularity = scenario.config.videoPopularity;
+        const selector = popularity && popularity.length > 0
+            ? {
+                pick: () => (0, sampling_1.sampleWeighted)(rng, popularity.map((p) => ({ value: p.videoId, weight: p.weight }))),
+            }
+            : (0, sampling_1.buildZipfSelector)(rng, pool, skew);
         const sampler = (0, sampling_1.buildWatchDurationSampler)(rng, opts?.watchDurationDistribution ??
             scenario.config.watchDurationDistribution);
         const sessions = [];

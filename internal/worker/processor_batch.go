@@ -78,7 +78,10 @@ for i = 1, n do
             local member = tostring(now_ms) .. '-' .. tostring(seq)
 
             redis.call('ZADD', velocity_key, now_ms, member)
-            redis.call('ZREMRANGEBYSCORE', velocity_key, 0, now_ms - window_ms)
+            -- Trim the sliding window periodically to reduce write amplification.
+            if (seq % 10) == 0 then
+                redis.call('ZREMRANGEBYSCORE', velocity_key, 0, now_ms - window_ms)
+            end
             local velocity = redis.call('ZCARD', velocity_key)
             redis.call('ZADD', trending_key, velocity, video_id)
             local window_sec = math.floor(window_ms / 1000)
