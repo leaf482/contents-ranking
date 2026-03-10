@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"strconv"
 	"time"
 
@@ -68,23 +70,13 @@ for i = 1, n do
             redis.call('ZINCRBY', ranking_key, 1, video_id)
             accum = accum - thresh
             ranked = ranked + 1
-            -- Trending velocity tracking
-            local velocity_key = 'ranking:velocity:' .. video_id
-            local trending_key = 'ranking:trending'
-            -- Use a per-video monotonic counter to ensure each velocity
-            -- event has a unique member, even when multiple events share
-            -- the same millisecond timestamp.
-            local seq = redis.call('INCR', velocity_key .. ':seq')
-            local member = tostring(now_ms) .. '-' .. tostring(seq)
-
-            redis.call('ZADD', velocity_key, now_ms, member)
-            redis.call('ZREMRANGEBYSCORE', velocity_key, 0, now_ms - window_ms)
-            local velocity = redis.call('ZCARD', velocity_key)
-            redis.call('ZADD', trending_key, velocity, video_id)
-            -- TTL so inactive velocity keys are removed and do not leak memory
-            local window_sec = math.floor(window_ms / 1000)
-            redis.call('EXPIRE', velocity_key, window_sec * 2)
-            redis.call('EXPIRE', velocity_key .. ':seq', window_sec * 2)
+            -- TEMP DISABLED FOR THROUGHPUT BENCHMARK
+            -- Trending/velocity logic intentionally disabled to isolate the
+            -- performance impact of the following Redis operations in the hot path:
+            --   - INCR velocity seq
+            --   - ZADD/ZREMRANGEBYSCORE/ZCARD velocity window
+            --   - ZADD ranking:trending
+            --   - EXPIRE velocity keys
         end
 
         redis.call('HSET', session_key, 'last_playhead', cur, 'accumulated', accum)
@@ -110,11 +102,15 @@ func (p *Processor) ProcessBatch(ctx context.Context, msgs []kafka.Message) (ran
 
 	args := []interface{}{maxHeartbeatGap, rankThreshold, int(sessionTTL.Seconds())}
 
+	var firstEvent *models.HeartbeatEvent
 	for _, msg := range msgs {
 		var event models.HeartbeatEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			metrics.WorkerEventsProcessedTotal.WithLabelValues("error").Inc()
 			return 0, fmt.Errorf("unmarshal: %w", err)
+		}
+		if firstEvent == nil {
+			firstEvent = &event
 		}
 
 		sessionKey := fmt.Sprintf("session:%s:%s", event.SessionID, event.VideoID)
@@ -155,11 +151,19 @@ func (p *Processor) ProcessBatch(ctx context.Context, msgs []kafka.Message) (ran
 	}
 
 	increments := toInt(results[0])
-	// Debug values are currently unused here but available:
-	// debugDelta := toInt(results[1])
-	// debugAccum := toInt(results[2])
-	// debugCur := toInt(results[3])
-	// debugLast := toInt(results[4])
+	debugDelta := toInt(results[1])
+	debugAccum := toInt(results[2])
+	debugCur := toInt(results[3])
+	debugLast := toInt(results[4])
+
+	if os.Getenv("DEBUG") != "" {
+		if firstEvent != nil {
+			log.Printf("[worker:batch] first event session=%s video=%s playhead=%d",
+				firstEvent.SessionID, firstEvent.VideoID, firstEvent.Playhead)
+		}
+		log.Printf("[worker:batch] batch_size=%d ranked=%d (last event: playhead=%d last_playhead=%d delta=%d accumulated=%d)",
+			len(msgs), increments, debugCur, debugLast, debugDelta, debugAccum)
+	}
 
 	for range msgs {
 		metrics.WorkerEventsProcessedTotal.WithLabelValues("success").Inc()

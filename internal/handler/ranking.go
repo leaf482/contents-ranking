@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -85,6 +86,11 @@ func (h *RankingHandler) HandleGetRanking(w http.ResponseWriter, r *http.Request
 		log.Printf("handler: GetTopRankings error: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
+	}
+
+	if os.Getenv("DEBUG") != "" && len(items) > 0 {
+		log.Printf("handler: ranking from ranking:global count=%d first=%q score=%.0f",
+			len(items), items[0].VideoID, items[0].Score)
 	}
 
 	h.cache.set(items)

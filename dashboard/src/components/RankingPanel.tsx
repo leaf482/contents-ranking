@@ -88,12 +88,18 @@ export function RankingPanel() {
   const fetchRanking = useCallback(async () => {
     try {
       const [rankRes, attrRes, detailRes] = await Promise.all([
-        fetch(`${GO_API_BASE}/v1/ranking?limit=10`),
+        fetch(`${GO_API_BASE}/v1/ranking?limit=10`, { cache: 'no-store' }),
         fetch(`${SIMULATION_BASE}/v1/factory/scenarios/attribution`),
         fetch(`${SIMULATION_BASE}/v1/factory/scenarios/attribution/detail`),
       ]);
       const rankJson = await rankRes.json();
-      const items: RankingItem[] = Array.isArray(rankJson) ? rankJson : [];
+      const rawItems = Array.isArray(rankJson) ? rankJson : [];
+      console.log('[RankingPanel] rawItems from API:', rawItems);
+      // Normalize keys: API sends video_id/score; accept either snake_case or Score if ever sent
+      const items: RankingItem[] = rawItems.map((row: { video_id?: string; score?: number; VideoID?: string; Score?: number }) => ({
+        video_id: row.video_id ?? row.VideoID ?? '',
+        score: Number(row.score ?? row.Score ?? 0),
+      }));
       const attr = await attrRes.json().catch(() => ({}));
       const detail = await detailRes.json().catch(() => ({}));
       setAttribution(typeof attr === 'object' ? attr : {});
