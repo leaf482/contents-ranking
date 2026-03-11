@@ -24,6 +24,7 @@ const (
 )
 
 // rankScript implements simplified per-heartbeat ranking and velocity updates.
+// NOTE: Trending updates have been decoupled and are now computed periodically by background worker.
 //
 // For each heartbeat event:
 //   - delta_ms           = ARGV[2]
@@ -34,12 +35,11 @@ const (
 //   - removed = ZREMRANGEBYSCORE velocity:<video_id> -inf (now_ms - window_ms)
 //   - if removed > 0: DECRBY velocity_count:<video_id> removed
 //   - velocity = GET velocity_count:<video_id>
-//   - ZADD ranking:trending velocity video_id
 //   - EXPIRE velocity:<video_id> (window_ms/1000)*2
 //   - EXPIRE velocity_count:<video_id> (window_ms/1000)*2
 //
-// KEYS[1] = ranking key
-// KEYS[2] = trending key
+// KEYS[1] = ranking key (not used but passed for consistency)
+// KEYS[2] = trending key (not used but passed for consistency)
 // ARGV[1] = video_id
 // ARGV[2] = delta_ms
 // ARGV[3] = window_ms
@@ -73,7 +73,6 @@ if removed > 0 then
 end
 
 local velocity = tonumber(redis.call('GET', velocity_count_key)) or 0
-redis.call('ZADD', trending_key, velocity, video_id)
 
 local ttl_seconds = math.ceil(window_ms / 1000 * 2)
 redis.call('EXPIRE', velocity_key, ttl_seconds)

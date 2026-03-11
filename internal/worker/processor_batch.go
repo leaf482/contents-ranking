@@ -18,10 +18,11 @@ import (
 
 // rankBatchScript processes N events in one Redis call using the simplified
 // per-heartbeat scoring and velocity semantics with counter-based velocity tracking.
+// NOTE: Trending updates have been decoupled and are now computed periodically by background worker.
 // Includes TTL expiration to prevent unbounded key growth.
 //
 // KEYS[1] = ranking key
-// KEYS[2] = trending key
+// KEYS[2] = trending key (not used but passed for consistency)
 // ARGV[1] = window_ms
 // ARGV[2], ARGV[3] = video_id_1, delta_ms_1
 // ARGV[4], ARGV[5] = video_id_2, delta_ms_2
@@ -65,7 +66,6 @@ for i = 1, n do
         end
         
         local velocity = tonumber(redis.call('GET', velocity_count_key)) or 0
-        redis.call('ZADD', trending_key, velocity, video_id)
         
         local ttl_seconds = math.ceil(window_ms / 1000 * 2)
         redis.call('EXPIRE', velocity_key, ttl_seconds)
