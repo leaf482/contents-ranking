@@ -62,6 +62,7 @@ func StartTrendingRecompute(ctx context.Context, rdb *redis.Client) {
 }
 
 // recomputeTrending rebuilds the trending ZSET from velocity counters.
+// Also performs cleanup by removing inactive videos from ranking:active_videos.
 func recomputeTrending(ctx context.Context, rdb *redis.Client) error {
 	start := time.Now()
 
@@ -78,6 +79,7 @@ func recomputeTrending(ctx context.Context, rdb *redis.Client) error {
 
 	videosProcessed := 0
 	entriesAdded := 0
+	inactiveRemoved := 0
 
 	// Process each active video
 	for _, videoID := range activeVideos {
@@ -88,6 +90,16 @@ func recomputeTrending(ctx context.Context, rdb *redis.Client) error {
 		velocity, err := rdb.Get(ctx, velocityCountKey).Float64()
 		if err != nil && err != redis.Nil {
 			return err
+		}
+
+		// If velocity counter expired or is zero, remove from active set
+		if err == redis.Nil || velocity <= 0 {
+			// SREM ranking:active_videos video_id
+			if err := rdb.SRem(ctx, activeVideosKey, videoID).Err(); err != nil {
+				return err
+			}
+			inactiveRemoved++
+			continue
 		}
 
 		// Only add to trending if velocity > 0
@@ -112,8 +124,8 @@ func recomputeTrending(ctx context.Context, rdb *redis.Client) error {
 
 	duration := time.Since(start)
 	if os.Getenv("DEBUG") != "" {
-		log.Printf("worker: trending recomputed videos_processed=%d entries_added=%d duration=%v",
-			videosProcessed, entriesAdded, duration)
+		log.Printf("worker: trending recomputed videos_processed=%d entries_added=%d inactive_removed=%d duration=%v",
+			videosProcessed, entriesAdded, inactiveRemoved, duration)
 	}
 
 	return nil
