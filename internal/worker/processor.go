@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -72,14 +71,13 @@ return {score_inc, velocity, delta_ms}
 type Processor struct {
 	rdb *redis.Client
 
-	mu           sync.Mutex
-	lastPlayhead map[string]int64 // session_id:video_id -> last_playhead
+	playheads *playheadStore
 }
 
 func NewProcessor(rdb *redis.Client) *Processor {
 	return &Processor{
-		rdb:          rdb,
-		lastPlayhead: make(map[string]int64, 1024),
+		rdb:       rdb,
+		playheads: newPlayheadStore(64),
 	}
 }
 
@@ -94,22 +92,12 @@ const (
 func (p *Processor) computeDeltaMs(sessionID, videoID string, currentPlayhead int64) (int64, bool) {
 	key := sessionID + ":" + videoID
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	prev, exists := p.lastPlayhead[key]
-	p.lastPlayhead[key] = currentPlayhead
+	prev, exists := p.playheads.Get(key)
+	p.playheads.Set(key, currentPlayhead)
 
 	// Best-effort cleanup to bound memory under untrusted/high-cardinality traffic.
-	if len(p.lastPlayhead) > playheadStateMaxEntries {
-		evicted := 0
-		for k := range p.lastPlayhead {
-			delete(p.lastPlayhead, k)
-			evicted++
-			if evicted >= playheadEvictBatch {
-				break
-			}
-		}
+	if p.playheads.Size() > playheadStateMaxEntries {
+		p.playheads.DeleteRandom(playheadEvictBatch)
 	}
 
 	if !exists {
