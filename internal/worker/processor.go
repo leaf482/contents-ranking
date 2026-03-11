@@ -35,6 +35,7 @@ const (
 //   - removed = ZREMRANGEBYSCORE velocity:<video_id> -inf (now_ms - window_ms)
 //   - if removed > 0: DECRBY velocity_count:<video_id> removed
 //   - velocity = GET velocity_count:<video_id>
+//   - SADD ranking:active_videos video_id (track for trending recompute)
 //   - EXPIRE velocity:<video_id> (window_ms/1000)*2
 //   - EXPIRE velocity_count:<video_id> (window_ms/1000)*2
 //
@@ -73,6 +74,8 @@ if removed > 0 then
 end
 
 local velocity = tonumber(redis.call('GET', velocity_count_key)) or 0
+
+redis.call('SADD', 'ranking:active_videos', video_id)
 
 local ttl_seconds = math.ceil(window_ms / 1000 * 2)
 redis.call('EXPIRE', velocity_key, ttl_seconds)

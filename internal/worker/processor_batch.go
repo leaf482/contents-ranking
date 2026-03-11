@@ -20,6 +20,7 @@ import (
 // per-heartbeat scoring and velocity semantics with counter-based velocity tracking.
 // NOTE: Trending updates have been decoupled and are now computed periodically by background worker.
 // Includes TTL expiration to prevent unbounded key growth.
+// Active videos are tracked in ranking:active_videos for efficient trending recomputation.
 //
 // KEYS[1] = ranking key
 // KEYS[2] = trending key (not used but passed for consistency)
@@ -66,6 +67,8 @@ for i = 1, n do
         end
         
         local velocity = tonumber(redis.call('GET', velocity_count_key)) or 0
+        
+        redis.call('SADD', 'ranking:active_videos', video_id)
         
         local ttl_seconds = math.ceil(window_ms / 1000 * 2)
         redis.call('EXPIRE', velocity_key, ttl_seconds)

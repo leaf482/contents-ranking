@@ -13,6 +13,7 @@ import (
 const (
 	defaultTrendingRecomputeIntervalSeconds = 10
 	trendingTmpKey                          = "ranking:trending_tmp"
+	activeVideosKey                         = "ranking:active_videos"
 	velocityCountKeyPrefix                  = "ranking:velocity_count:"
 )
 
@@ -22,10 +23,11 @@ const (
 // Algorithm:
 // 1. Every N seconds:
 // 2. Create a temporary ZSET: ranking:trending_tmp
-// 3. SCAN ranking:velocity_count:* and build the trending ZSET
-// 4. RENAME ranking:trending_tmp -> ranking:trending (atomic swap)
+// 3. Get all active videos from: ranking:active_videos (maintained by heartbeat processors)
+// 4. For each video_id, read velocity_count and build trending ZSET
+// 5. RENAME ranking:trending_tmp -> ranking:trending (atomic swap)
 //
-// This decouples trending computation from the heartbeat hot path and reduces Redis contention.
+// This decouples trending computation from the heartbeat hot path and avoids expensive SCANs.
 //
 // Env:
 // - TRENDING_RECOMPUTE_INTERVAL_SECONDS (default 10)
@@ -68,52 +70,41 @@ func recomputeTrending(ctx context.Context, rdb *redis.Client) error {
 		return err
 	}
 
-	// Scan all velocity_count keys
-	var cursor uint64
-	keysProcessed := 0
+	// Get all active videos from the set
+	activeVideos, err := rdb.SMembers(ctx, activeVideosKey).Result()
+	if err != nil {
+		return err
+	}
+
+	videosProcessed := 0
 	entriesAdded := 0
 
-	for {
-		// SCAN ranking:velocity_count:*
-		keys, newCursor, err := rdb.Scan(ctx, cursor, velocityCountKeyPrefix+"*", 100).Result()
-		if err != nil {
+	// Process each active video
+	for _, videoID := range activeVideos {
+		videosProcessed++
+
+		// GET velocity_count:<video_id>
+		velocityCountKey := velocityCountKeyPrefix + videoID
+		velocity, err := rdb.Get(ctx, velocityCountKey).Float64()
+		if err != nil && err != redis.Nil {
 			return err
 		}
 
-		// Process batch of keys
-		for _, key := range keys {
-			keysProcessed++
-
-			// Extract video_id from "ranking:velocity_count:<video_id>"
-			videoID := key[len(velocityCountKeyPrefix):]
-
-			// GET velocity_count:<video_id>
-			velocity, err := rdb.Get(ctx, key).Float64()
-			if err != nil && err != redis.Nil {
+		// Only add to trending if velocity > 0
+		if velocity > 0 {
+			// ZADD ranking:trending_tmp velocity video_id
+			if err := rdb.ZAdd(ctx, trendingTmpKey, redis.Z{
+				Score:  velocity,
+				Member: videoID,
+			}).Err(); err != nil {
 				return err
 			}
-
-			// Only add to trending if velocity > 0
-			if velocity > 0 {
-				// ZADD ranking:trending_tmp velocity video_id
-				if err := rdb.ZAdd(ctx, trendingTmpKey, redis.Z{
-					Score:  velocity,
-					Member: videoID,
-				}).Err(); err != nil {
-					return err
-				}
-				entriesAdded++
-			}
-		}
-
-		cursor = newCursor
-		if cursor == 0 {
-			break
+			entriesAdded++
 		}
 	}
 
 	// Atomic swap: RENAME ranking:trending_tmp ranking:trending
-	if err := rdb.Rename(ctx, trendingTmpKey, trendingKey).Err(); err != nil {
+	if err := rdb.Rename(ctx, trendingTmpKey, "ranking:trending").Err(); err != nil {
 		// If the rename fails, clean up the tmp key
 		_ = rdb.Del(ctx, trendingTmpKey).Err()
 		return err
@@ -121,8 +112,8 @@ func recomputeTrending(ctx context.Context, rdb *redis.Client) error {
 
 	duration := time.Since(start)
 	if os.Getenv("DEBUG") != "" {
-		log.Printf("worker: trending recomputed keys_processed=%d entries_added=%d duration=%v",
-			keysProcessed, entriesAdded, duration)
+		log.Printf("worker: trending recomputed videos_processed=%d entries_added=%d duration=%v",
+			videosProcessed, entriesAdded, duration)
 	}
 
 	return nil
