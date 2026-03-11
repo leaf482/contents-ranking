@@ -68,6 +68,9 @@ func main() {
 	// Ranking score decay loop — runs independently of heartbeat processing.
 	worker.StartDecayLoop(ctx, rdb)
 
+	// Trending recompute loop — runs independently of heartbeat processing.
+	worker.StartTrendingRecompute(ctx, rdb)
+
 	log.Printf("worker: consuming topic=%s group=%s", cfg.KafkaTopic, consumerGroupID)
 	w.Run(ctx)
 
