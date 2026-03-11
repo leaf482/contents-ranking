@@ -30,8 +30,10 @@ const (
 //   - score_increment    = delta_ms / scoreDenominator
 //   - ZINCRBY ranking:global score_increment video_id
 //   - ZADD velocity:<video_id> now_ms now_ms
-//   - ZREMRANGEBYSCORE velocity:<video_id> 0 (now_ms - window_ms)
-//   - velocity = ZCARD velocity:<video_id>
+//   - INCR velocity_count:<video_id>
+//   - removed = ZREMRANGEBYSCORE velocity:<video_id> -inf (now_ms - window_ms)
+//   - if removed > 0: DECRBY velocity_count:<video_id> removed
+//   - velocity = GET velocity_count:<video_id>
 //   - ZADD ranking:trending velocity video_id
 //
 // KEYS[1] = ranking key
@@ -58,10 +60,17 @@ redis.call('ZINCRBY', ranking_key, score_inc, video_id)
 local now_parts = redis.call('TIME')
 local now_ms = now_parts[1] * 1000 + math.floor(now_parts[2] / 1000)
 local velocity_key = 'ranking:velocity:' .. video_id
+local velocity_count_key = 'ranking:velocity_count:' .. video_id
 
 redis.call('ZADD', velocity_key, now_ms, now_ms)
-redis.call('ZREMRANGEBYSCORE', velocity_key, 0, now_ms - window_ms)
-local velocity = redis.call('ZCARD', velocity_key)
+redis.call('INCR', velocity_count_key)
+
+local removed = redis.call('ZREMRANGEBYSCORE', velocity_key, '-inf', now_ms - window_ms)
+if removed > 0 then
+    redis.call('DECRBY', velocity_count_key, removed)
+end
+
+local velocity = tonumber(redis.call('GET', velocity_count_key)) or 0
 redis.call('ZADD', trending_key, velocity, video_id)
 
 return {score_inc, velocity, delta_ms}

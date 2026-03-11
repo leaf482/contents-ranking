@@ -17,7 +17,7 @@ import (
 )
 
 // rankBatchScript processes N events in one Redis call using the simplified
-// per-heartbeat scoring and velocity semantics.
+// per-heartbeat scoring and velocity semantics with counter-based velocity tracking.
 //
 // KEYS[1] = ranking key
 // KEYS[2] = trending key
@@ -52,9 +52,17 @@ for i = 1, n do
         total_score = total_score + score_inc
 
         local velocity_key = 'ranking:velocity:' .. video_id
+        local velocity_count_key = 'ranking:velocity_count:' .. video_id
+        
         redis.call('ZADD', velocity_key, now_ms, now_ms)
-        redis.call('ZREMRANGEBYSCORE', velocity_key, 0, now_ms - window_ms)
-        local velocity = redis.call('ZCARD', velocity_key)
+        redis.call('INCR', velocity_count_key)
+        
+        local removed = redis.call('ZREMRANGEBYSCORE', velocity_key, '-inf', now_ms - window_ms)
+        if removed > 0 then
+            redis.call('DECRBY', velocity_count_key, removed)
+        end
+        
+        local velocity = tonumber(redis.call('GET', velocity_count_key)) or 0
         redis.call('ZADD', trending_key, velocity, video_id)
 
         last_delta = delta_ms
