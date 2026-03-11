@@ -23,8 +23,9 @@ func New(brokers []string, topic, groupID string, processor *Processor, batchSiz
 		batchSize = 50
 	}
 	if flushInterval <= 0 {
-		flushInterval = 100 * time.Millisecond
+		flushInterval = 25 * time.Millisecond
 	}
+
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:  brokers,
 		Topic:    topic,
@@ -35,6 +36,7 @@ func New(brokers []string, topic, groupID string, processor *Processor, batchSiz
 		// after a batch has been successfully processed to avoid message loss.
 		CommitInterval: 0,
 	})
+
 	return &Worker{
 		reader:    r,
 		processor: processor,
@@ -49,27 +51,154 @@ func debugLog(format string, args ...interface{}) {
 	}
 }
 
-// Run consumes messages until ctx is cancelled.
-// Uses a buffer-based batcher: flush on N messages or T interval.
-// Graceful shutdown flushes remaining buffer before exit.
+type partitionLane struct {
+	partition int
+	ch        chan kafka.Message
+}
+
 func (w *Worker) Run(ctx context.Context) {
-	log.Println("worker: starting consumer loop (batch mode)")
+	log.Println("worker: starting consumer loop (partition-lane batch mode)")
 	log.Printf("worker: batch config size=%d flush=%v", w.batchSize, w.flushInt)
 
-	// Derive a child context so this worker can cancel its own internal
-	// goroutines (producer/batcher) on fatal batch failures without
-	// affecting unrelated parent work.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	msgCh := make(chan kafka.Message, w.batchSize*2)
-	var wg sync.WaitGroup
+	msgCh := make(chan kafka.Message, w.batchSize*16)
 
-	// Producer: fetch from Kafka and push to channel
-	wg.Add(1)
+	var fetchWG sync.WaitGroup
+	var lanesWG sync.WaitGroup
+	var commitMu sync.Mutex
+
+	lanes := make(map[int]*partitionLane)
+
+	flushLane := func(ctx context.Context, batch *[]kafka.Message) error {
+		if len(*batch) == 0 {
+			return nil
+		}
+
+		toProcess := make([]kafka.Message, len(*batch))
+		copy(toProcess, *batch)
+
+		ranked, err := w.processor.ProcessBatch(ctx, toProcess)
+		if err != nil {
+			err = fmt.Errorf("batch process error: %w", err)
+			log.Printf("worker: %v", err)
+			return err
+		}
+
+		commitMu.Lock()
+		err = w.reader.CommitMessages(ctx, toProcess...)
+		commitMu.Unlock()
+		if err != nil {
+			err = fmt.Errorf("batch commit error: %w", err)
+			log.Printf("worker: %v", err)
+			return err
+		}
+
+		*batch = (*batch)[:0]
+		log.Printf("worker: partition=%d processed batch size=%d ranked=%d", toProcess[0].Partition, len(toProcess), ranked)
+		return nil
+	}
+
+	startLane := func(partition int) *partitionLane {
+		lane := &partitionLane{
+			partition: partition,
+			ch:        make(chan kafka.Message, w.batchSize*8),
+		}
+
+		lanesWG.Add(1)
+		go func() {
+			defer lanesWG.Done()
+
+			batch := make([]kafka.Message, 0, w.batchSize)
+			ticker := time.NewTicker(w.flushInt)
+			defer ticker.Stop()
+
+			flush := func(ctx context.Context) error {
+				return flushLane(ctx, &batch)
+			}
+
+			for {
+				select {
+				case <-ctx.Done():
+					shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+
+					for msg := range lane.ch {
+						batch = append(batch, msg)
+						if len(batch) >= w.batchSize {
+							if err := flush(shutdownCtx); err != nil {
+								log.Printf("worker: partition=%d flush error during shutdown: %v", partition, err)
+							}
+						}
+					}
+					if err := flush(shutdownCtx); err != nil {
+						log.Printf("worker: partition=%d final flush error during shutdown: %v", partition, err)
+					}
+					log.Printf("worker: partition lane stopped partition=%d", partition)
+					return
+
+				case msg, ok := <-lane.ch:
+					if !ok {
+						if err := flush(ctx); err != nil {
+							log.Printf("worker: partition=%d flush error on channel close: %v", partition, err)
+						}
+						log.Printf("worker: partition lane closed partition=%d", partition)
+						return
+					}
+
+					batch = append(batch, msg)
+					if len(batch) >= w.batchSize {
+						if err := flush(ctx); err != nil {
+							log.Printf("worker: fatal partition batch flush error partition=%d: %v", partition, err)
+							cancel()
+							return
+						}
+						ticker.Reset(w.flushInt)
+					}
+
+				case <-ticker.C:
+					if err := flush(ctx); err != nil {
+						log.Printf("worker: fatal partition batch flush error on interval partition=%d: %v", partition, err)
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+
+		return lane
+	}
+
+	closeAllLanes := func() {
+		for _, lane := range lanes {
+			close(lane.ch)
+		}
+		lanesWG.Wait()
+	}
+
+	dispatch := func(msg kafka.Message) bool {
+		lane, ok := lanes[msg.Partition]
+		if !ok {
+			lane = startLane(msg.Partition)
+			lanes[msg.Partition] = lane
+			log.Printf("worker: started partition lane partition=%d", msg.Partition)
+		}
+
+		select {
+		case lane.ch <- msg:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	// Fetcher: pull from Kafka as fast as possible.
+	fetchWG.Add(1)
 	go func() {
-		defer wg.Done()
+		defer fetchWG.Done()
 		defer close(msgCh)
+
 		for {
 			msg, err := w.reader.FetchMessage(ctx)
 			if err != nil {
@@ -80,6 +209,7 @@ func (w *Worker) Run(ctx context.Context) {
 				log.Printf("worker: fetch error: %v", err)
 				continue
 			}
+
 			select {
 			case msgCh <- msg:
 			case <-ctx.Done():
@@ -89,102 +219,36 @@ func (w *Worker) Run(ctx context.Context) {
 		}
 	}()
 
-	// Batcher: collect and flush on size or interval
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		batch := make([]kafka.Message, 0, w.batchSize)
-		ticker := time.NewTicker(w.flushInt)
-		defer ticker.Stop()
-
-		// flush processes the current in-memory batch.
-		// Important failure semantics:
-		//   - The batch is only cleared after BOTH processing and offset commit
-		//     succeed. This ensures messages are not dropped from memory on
-		//     transient failures and can be retried.
-		//   - If processing or commit fails, the batch remains in memory and
-		//     will be retried on the next flush trigger (size or interval).
-		flush := func(ctx context.Context) error {
-			if len(batch) == 0 {
-				return nil
-			}
-			toProcess := make([]kafka.Message, len(batch))
-			copy(toProcess, batch)
-
-			ranked, err := w.processor.ProcessBatch(ctx, toProcess)
-			if err != nil {
-				err = fmt.Errorf("batch process error: %w", err)
-				log.Printf("worker: %v", err)
-				return err
-			}
-			if err := w.reader.CommitMessages(ctx, toProcess...); err != nil {
-				err = fmt.Errorf("batch commit error: %w", err)
-				log.Printf("worker: %v", err)
-				// Keep the batch in memory so it can be retried; offsets have
-				// not been committed, so reprocessing is safer than loss.
-				return err
-			}
-			// Processing and commit both succeeded; it is now safe to drop the batch.
-			batch = batch[:0]
-			log.Printf("worker: processed batch size=%d ranked=%d", len(toProcess), ranked)
-			return nil
-		}
-
-		drainAndFlush := func(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			fetchWG.Wait()
 			for msg := range msgCh {
-				batch = append(batch, msg)
-				if len(batch) >= w.batchSize {
-					if err := flush(ctx); err != nil {
-						// During shutdown we do best-effort flushing; errors are
-						// logged by flush and do not change shutdown behavior.
-						log.Printf("worker: flush error during shutdown: %v", err)
-					}
+				if !dispatch(msg) {
+					break
 				}
 			}
-			if err := flush(ctx); err != nil {
-				log.Printf("worker: flush error during shutdown: %v", err)
-			}
-		}
+			closeAllLanes()
+			log.Println("worker: consumer loop stopped")
+			return
 
-		for {
-			select {
-			case <-ctx.Done():
-				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				drainAndFlush(shutdownCtx)
-				log.Println("worker: batcher shutdown, flushed remaining")
+		case msg, ok := <-msgCh:
+			if !ok {
+				closeAllLanes()
+				log.Println("worker: consumer loop stopped")
 				return
-			case msg, ok := <-msgCh:
-				if !ok {
-					if err := flush(ctx); err != nil {
-						log.Printf("worker: flush error on channel close: %v", err)
-					}
-					return
+			}
+			if !dispatch(msg) {
+				fetchWG.Wait()
+				for msg := range msgCh {
+					_ = dispatch(msg)
 				}
-				batch = append(batch, msg)
-				if len(batch) >= w.batchSize {
-					if err := flush(ctx); err != nil {
-						log.Printf("worker: fatal batch flush error: %v; stopping worker", err)
-						// Cancel the worker context so the producer can stop and
-						// the Run method can return. Offsets for this batch were
-						// not committed, so they will be safely reprocessed.
-						cancel()
-						return
-					}
-					ticker.Reset(w.flushInt)
-				}
-			case <-ticker.C:
-				if err := flush(ctx); err != nil {
-					log.Printf("worker: fatal batch flush error on interval: %v; stopping worker", err)
-					cancel()
-					return
-				}
+				closeAllLanes()
+				log.Println("worker: consumer loop stopped")
+				return
 			}
 		}
-	}()
-
-	wg.Wait()
-	log.Println("worker: consumer loop stopped")
+	}
 }
 
 func (w *Worker) Close() error {

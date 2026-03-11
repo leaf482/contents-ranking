@@ -58,15 +58,13 @@ for i = 1, n do
         local velocity_key = 'ranking:velocity:' .. video_id
         local velocity_count_key = 'ranking:velocity_count:' .. video_id
         
-        redis.call('ZADD', velocity_key, now_ms, now_ms)
-        redis.call('INCR', velocity_count_key)
+        redis.call('ZADD', velocity_key, now_ms, tostring(now_ms) .. ':' .. tostring(i))
+        local velocity = redis.call('INCR', velocity_count_key)
         
         local removed = redis.call('ZREMRANGEBYSCORE', velocity_key, '-inf', now_ms - window_ms)
         if removed > 0 then
-            redis.call('DECRBY', velocity_count_key, removed)
+            velocity = redis.call('DECRBY', velocity_count_key, removed)
         end
-        
-        local velocity = tonumber(redis.call('GET', velocity_count_key)) or 0
         
         redis.call('SADD', 'ranking:active_videos', video_id)
         
