@@ -35,6 +35,8 @@ const (
 //   - if removed > 0: DECRBY velocity_count:<video_id> removed
 //   - velocity = GET velocity_count:<video_id>
 //   - ZADD ranking:trending velocity video_id
+//   - EXPIRE velocity:<video_id> (window_ms/1000)*2
+//   - EXPIRE velocity_count:<video_id> (window_ms/1000)*2
 //
 // KEYS[1] = ranking key
 // KEYS[2] = trending key
@@ -72,6 +74,10 @@ end
 
 local velocity = tonumber(redis.call('GET', velocity_count_key)) or 0
 redis.call('ZADD', trending_key, velocity, video_id)
+
+local ttl_seconds = math.ceil(window_ms / 1000 * 2)
+redis.call('EXPIRE', velocity_key, ttl_seconds)
+redis.call('EXPIRE', velocity_count_key, ttl_seconds)
 
 return {score_inc, velocity, delta_ms}
 `)
