@@ -47,6 +47,28 @@ var (
 		},
 	)
 
+	// P0 observability metrics (explicit names required)
+	KafkaEnqueueFailuresTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kafka_enqueue_failures_total",
+			Help: "Total number of Kafka enqueue attempts that failed (e.g., producer queue full).",
+		},
+	)
+
+	ProducerQueueDepth = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "producer_queue_depth",
+			Help: "Current number of messages waiting in the API Kafka producer queue.",
+		},
+	)
+
+	RedisScriptErrorsTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "redis_script_errors_total",
+			Help: "Total number of Redis Lua script execution errors.",
+		},
+	)
+
 	// Worker metrics
 	WorkerEventsProcessedTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{

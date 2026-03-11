@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -17,96 +18,112 @@ import (
 )
 
 const (
-	maxHeartbeatGap   = 35_000 // ms — gaps larger than this are seeks/pauses
-	rankThreshold     = 5_000  // ms — accumulated watch time needed for one ranking point
-	sessionTTL        = 6 * time.Hour
 	rankingKey        = "ranking:global"
+	trendingKey       = "ranking:trending"
 	velocityWindowSec = 60
+	scoreDenominator  = 5_000.0 // ms per ranking point
 )
 
-// rankScript runs an atomic read-modify-write on the session hash.
+// rankScript implements simplified per-heartbeat ranking and velocity updates.
 //
-// Logic:
-//   - 0 < delta <= maxHeartbeatGap: continuous watch, add to accumulated
-//   - delta > maxHeartbeatGap: seek or resume, reset accumulated
-//   - delta <= 0: backward seek or duplicate, ignore event (no state change)
-//   - accumulated >= rankThreshold: ZINCRBY ranking:global, subtract threshold
+// For each heartbeat event:
+//   - delta_ms           = ARGV[2]
+//   - score_increment    = delta_ms / scoreDenominator
+//   - ZINCRBY ranking:global score_increment video_id
+//   - ZADD velocity:<video_id> now_ms now_ms
+//   - ZREMRANGEBYSCORE velocity:<video_id> 0 (now_ms - window_ms)
+//   - velocity = ZCARD velocity:<video_id>
+//   - ZADD ranking:trending velocity video_id
 //
-// Lua keeps this atomic so concurrent workers on the same session don't race.
-//
-// KEYS[1] session key, KEYS[2] ranking key
-// ARGV[1] video_id, ARGV[2] playhead (ms), ARGV[3] maxHeartbeatGap,
-// ARGV[4] rankThreshold, ARGV[5] TTL (seconds)
-// Returns the number of ranking points awarded for this event.
+// KEYS[1] = ranking key
+// KEYS[2] = trending key
+// ARGV[1] = video_id
+// ARGV[2] = delta_ms
+// ARGV[3] = window_ms
+// Returns {score_increment, velocity, delta_ms}.
 var rankScript = redis.NewScript(`
-local last   = tonumber(redis.call('HGET', KEYS[1], 'last_playhead')) or 0
-local accum  = tonumber(redis.call('HGET', KEYS[1], 'accumulated'))   or 0
-local cur    = tonumber(ARGV[2])
-local gap    = tonumber(ARGV[3])
-local thresh = tonumber(ARGV[4])
-local ttl    = tonumber(ARGV[5])
-local now_parts = redis.call('TIME')
-local now_ms = now_parts[1] * 1000 + math.floor(now_parts[2] / 1000)
-local window_ms = ` + fmt.Sprint(velocityWindowSec*1000) + `
+local ranking_key = KEYS[1]
+local trending_key = KEYS[2]
 
-local delta = cur - last
-local ranked = 0
+local video_id = ARGV[1]
+local delta_ms = tonumber(ARGV[2])
+local window_ms = tonumber(ARGV[3])
 
--- Debug copies for inspection
-local debug_delta = delta
-local debug_accum = accum
-local debug_cur = cur
-local debug_last = last
-
-if delta > 0 then
-    if delta <= gap then
-        accum = accum + delta
-    elseif delta > gap then
-        accum = 0
-    end
-
-    while accum >= thresh do
-        redis.call('ZINCRBY', KEYS[2], 1, ARGV[1])
-        accum = accum - thresh
-        ranked = ranked + 1
-
-        -- Trending velocity tracking
-        local velocity_key = 'ranking:velocity:' .. ARGV[1]
-        local trending_key = 'ranking:trending'
-        -- Use a per-video monotonic counter to ensure each velocity
-        -- event has a unique member, even when multiple events share
-        -- the same millisecond timestamp.
-        local seq = redis.call('INCR', velocity_key .. ':seq')
-        local member = tostring(now_ms) .. '-' .. tostring(seq)
-
-        redis.call('ZADD', velocity_key, now_ms, member)
-        -- Trim the sliding window periodically to reduce write amplification.
-        if (seq % 10) == 0 then
-            redis.call('ZREMRANGEBYSCORE', velocity_key, 0, now_ms - window_ms)
-        end
-        local velocity = redis.call('ZCARD', velocity_key)
-        redis.call('ZADD', trending_key, velocity, ARGV[1])
-        -- TTL so inactive velocity keys are removed and do not leak memory
-        local window_sec = math.floor(window_ms / 1000)
-        redis.call('EXPIRE', velocity_key, window_sec * 2)
-        redis.call('EXPIRE', velocity_key .. ':seq', window_sec * 2)
-    end
-
-    redis.call('HSET', KEYS[1], 'last_playhead', cur, 'accumulated', accum)
+if not delta_ms or delta_ms <= 0 then
+    return {0, 0, delta_ms or 0}
 end
 
-redis.call('EXPIRE', KEYS[1], ttl)
+local score_inc = delta_ms / ` + fmt.Sprintf("%f", scoreDenominator) + `
+redis.call('ZINCRBY', ranking_key, score_inc, video_id)
 
-return {ranked, debug_delta, debug_accum, debug_cur, debug_last}
+local now_parts = redis.call('TIME')
+local now_ms = now_parts[1] * 1000 + math.floor(now_parts[2] / 1000)
+local velocity_key = 'ranking:velocity:' .. video_id
+
+redis.call('ZADD', velocity_key, now_ms, now_ms)
+redis.call('ZREMRANGEBYSCORE', velocity_key, 0, now_ms - window_ms)
+local velocity = redis.call('ZCARD', velocity_key)
+redis.call('ZADD', trending_key, velocity, video_id)
+
+return {score_inc, velocity, delta_ms}
 `)
 
 // Processor handles the business logic for a single heartbeat event.
 type Processor struct {
 	rdb *redis.Client
+
+	mu           sync.Mutex
+	lastPlayhead map[string]int64 // session_id:video_id -> last_playhead
 }
 
 func NewProcessor(rdb *redis.Client) *Processor {
-	return &Processor{rdb: rdb}
+	return &Processor{
+		rdb:          rdb,
+		lastPlayhead: make(map[string]int64, 1024),
+	}
+}
+
+const (
+	playheadStateMaxEntries = 100_000
+	playheadEvictBatch      = 1_000
+	playheadDeltaClampMs    = int64(10_000)
+)
+
+// computeDeltaMs returns (delta_ms, ok). ok==true means delta_ms > 0 and should be processed.
+// This state is intentionally kept in-memory only (no Redis session keys).
+func (p *Processor) computeDeltaMs(sessionID, videoID string, currentPlayhead int64) (int64, bool) {
+	key := sessionID + ":" + videoID
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	prev, exists := p.lastPlayhead[key]
+	p.lastPlayhead[key] = currentPlayhead
+
+	// Best-effort cleanup to bound memory under untrusted/high-cardinality traffic.
+	if len(p.lastPlayhead) > playheadStateMaxEntries {
+		evicted := 0
+		for k := range p.lastPlayhead {
+			delete(p.lastPlayhead, k)
+			evicted++
+			if evicted >= playheadEvictBatch {
+				break
+			}
+		}
+	}
+
+	if !exists {
+		return 0, false
+	}
+
+	delta := currentPlayhead - prev
+	if delta <= 0 {
+		return 0, false
+	}
+	if delta > playheadDeltaClampMs {
+		delta = playheadDeltaClampMs
+	}
+	return delta, true
 }
 
 func (p *Processor) Process(ctx context.Context, msg kafka.Message) error {
@@ -123,66 +140,69 @@ func (p *Processor) Process(ctx context.Context, msg kafka.Message) error {
 			event.SessionID, event.UserID, event.VideoID, event.Playhead)
 	}
 
-	sessionKey := fmt.Sprintf("session:%s:%s", event.SessionID, event.VideoID)
+	deltaMs, ok := p.computeDeltaMs(event.SessionID, event.VideoID, event.Playhead)
+	if !ok {
+		metrics.WorkerEventsProcessedTotal.WithLabelValues("success").Inc()
+		metrics.WorkerProcessingDuration.Observe(time.Since(start).Seconds())
+		return nil
+	}
 
 	raw, err := rankScript.Run(ctx, p.rdb,
-		[]string{sessionKey, rankingKey},
+		[]string{rankingKey, trendingKey},
 		event.VideoID,
-		event.Playhead,
-		maxHeartbeatGap,
-		rankThreshold,
-		int(sessionTTL.Seconds()),
+		deltaMs,
+		int64(velocityWindowSec*1000),
 	).Result()
 	if err != nil {
+		metrics.RedisScriptErrorsTotal.Inc()
 		metrics.WorkerEventsProcessedTotal.WithLabelValues("error").Inc()
 		return fmt.Errorf("lua rankScript (session=%s video=%s): %w",
 			event.SessionID, event.VideoID, err)
 	}
 
 	results, ok := raw.([]interface{})
-	if !ok || len(results) < 5 {
+	if !ok || len(results) < 3 {
+		metrics.RedisScriptErrorsTotal.Inc()
 		metrics.WorkerEventsProcessedTotal.WithLabelValues("error").Inc()
 		return fmt.Errorf("lua rankScript (session=%s video=%s): unexpected return type %T",
 			event.SessionID, event.VideoID, raw)
 	}
 
-	// Lua returns: {increments, debug_delta, debug_accum, debug_cur, debug_last}
-	toInt := func(v interface{}) int64 {
+	// Lua returns: {score_increment, velocity, delta_ms}
+	toFloat := func(v interface{}) float64 {
 		switch t := v.(type) {
 		case int64:
-			return t
+			return float64(t)
 		case int:
-			return int64(t)
+			return float64(t)
 		case float64:
-			return int64(t)
+			return t
 		case string:
-			val, _ := strconv.ParseInt(t, 10, 64)
+			val, _ := strconv.ParseFloat(t, 64)
 			return val
 		default:
 			return 0
 		}
 	}
 
-	increments := toInt(results[0])
-	debugDelta := toInt(results[1])
-	debugAccum := toInt(results[2])
-	debugCur := toInt(results[3])
-	debugLast := toInt(results[4])
+	scoreInc := toFloat(results[0])
+	velocity := toFloat(results[1])
+	delta := toFloat(results[2])
 
 	metrics.WorkerEventsProcessedTotal.WithLabelValues("success").Inc()
 	metrics.WorkerProcessingDuration.Observe(time.Since(start).Seconds())
 
 	if os.Getenv("DEBUG") != "" {
-		log.Printf("lua debug video=%s delta=%d accum=%d cur=%d last=%d increments=%d",
-			event.VideoID, debugDelta, debugAccum, debugCur, debugLast, increments)
+		log.Printf("lua debug video=%s delta_ms=%.0f score_inc=%.4f velocity=%.0f",
+			event.VideoID, delta, scoreInc, velocity)
 	}
 
-	if increments > 0 {
-		metrics.WorkerRankingUpdatesTotal.Add(float64(increments))
-		metrics.WorkerRankingVelocityUpdatesTotal.Add(float64(increments))
+	if scoreInc > 0 {
+		metrics.WorkerRankingUpdatesTotal.Add(scoreInc)
+		metrics.WorkerRankingVelocityUpdatesTotal.Add(scoreInc)
 		if os.Getenv("DEBUG") != "" {
-			log.Printf("[RANKING UPDATED] VideoID: %s, UserID: %s, points=%d",
-				event.VideoID, event.UserID, increments)
+			log.Printf("[RANKING UPDATED] VideoID: %s, UserID: %s, score_inc=%.4f",
+				event.VideoID, scoreInc)
 		}
 	}
 

@@ -2,12 +2,14 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -20,6 +22,13 @@ type Producer interface {
 	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
 	Close() error
 }
+
+var (
+	// ErrQueueFull indicates the buffered producer queue is at capacity.
+	ErrQueueFull = errors.New("kafka producer queue is full")
+	// ErrProducerClosed indicates the producer is shutting down or closed.
+	ErrProducerClosed = errors.New("kafka producer is closed")
+)
 
 type kafkaProducer struct {
 	writer *kafka.Writer
@@ -53,10 +62,10 @@ type bufferedProducer struct {
 	queue     chan kafka.Message
 	maxBatch  int
 	linger    time.Duration
-	ctx       context.Context
-	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	debugLogs bool
+	mu        sync.RWMutex
+	closed    uint32
 }
 
 // NewBufferedProducer creates a Producer that buffers messages in-memory and
@@ -74,16 +83,15 @@ func NewBufferedProducer(brokers []string, topic string, queueSize, maxBatch int
 		linger = 5 * time.Millisecond
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	p := &bufferedProducer{
 		base:      base,
 		queue:     make(chan kafka.Message, queueSize),
 		maxBatch:  maxBatch,
 		linger:    linger,
-		ctx:       ctx,
-		cancel:    cancel,
 		debugLogs: os.Getenv("DEBUG") != "",
 	}
+
+	metrics.ProducerQueueDepth.Set(0)
 
 	p.wg.Add(1)
 	go p.run()
@@ -92,16 +100,28 @@ func NewBufferedProducer(brokers []string, topic string, queueSize, maxBatch int
 }
 
 // WriteMessages enqueues messages into the in-memory buffer and returns
-// immediately. If the queue is full, messages are dropped and counted.
+// immediately. If the queue is full, it returns an explicit error.
 func (p *bufferedProducer) WriteMessages(ctx context.Context, msgs ...kafka.Message) error {
+	if atomic.LoadUint32(&p.closed) != 0 {
+		return ErrProducerClosed
+	}
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if atomic.LoadUint32(&p.closed) != 0 {
+		return ErrProducerClosed
+	}
+
 	for _, m := range msgs {
 		select {
 		case p.queue <- m:
+			metrics.ProducerQueueDepth.Set(float64(len(p.queue)))
 		default:
-			metrics.APIKafkaQueueDroppedTotal.Inc()
+			metrics.KafkaEnqueueFailuresTotal.Inc()
 			if p.debugLogs {
-				log.Printf("api: kafka queue full, dropping message key=%s", string(m.Key))
+				log.Printf("api: kafka queue full, enqueue failed key=%s", string(m.Key))
 			}
+			return ErrQueueFull
 		}
 	}
 	return nil
@@ -138,15 +158,14 @@ func (p *bufferedProducer) run() {
 
 	for {
 		select {
-		case <-p.ctx.Done():
-			flush()
-			return
 		case msg, ok := <-p.queue:
 			if !ok {
 				flush()
+				metrics.ProducerQueueDepth.Set(0)
 				return
 			}
 			batch = append(batch, msg)
+			metrics.ProducerQueueDepth.Set(float64(len(p.queue)))
 			if len(batch) >= p.maxBatch {
 				flush()
 			}
@@ -159,8 +178,14 @@ func (p *bufferedProducer) run() {
 // Close stops the background worker, flushes remaining messages, and closes the
 // underlying Kafka writer.
 func (p *bufferedProducer) Close() error {
-	p.cancel()
+	if !atomic.CompareAndSwapUint32(&p.closed, 0, 1) {
+		return nil
+	}
+
+	// Closing the queue drains all buffered messages before the worker exits.
+	p.mu.Lock()
 	close(p.queue)
+	p.mu.Unlock()
 	p.wg.Wait()
 	return p.base.Close()
 }
