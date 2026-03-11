@@ -225,7 +225,7 @@ func EnsureTopicExists(brokers []string, topic string) error {
 
 	err = ctrlConn.CreateTopics(kafka.TopicConfig{
 		Topic:             topic,
-		NumPartitions:     6,
+		NumPartitions:     24,
 		ReplicationFactor: 1,
 	})
 	if err != nil {
