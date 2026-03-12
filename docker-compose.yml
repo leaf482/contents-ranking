@@ -140,8 +140,12 @@ services:
     ports:
       - "3002:3000"
     environment:
+      # Server-side proxy targets
       GO_API_URL: http://go-api:8080
       SIMULATION_URL: http://simulation-service:3000
+      # Client-side base URLs (use dashboard /api proxies by default)
+      NEXT_PUBLIC_GO_API_URL: /api/go
+      NEXT_PUBLIC_SIMULATION_URL: /api/sim
     networks:
       - contents-ranking-net
     depends_on:
