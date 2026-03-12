@@ -32,9 +32,9 @@ func main() {
 	producer := kafka.NewBufferedProducer(
 		cfg.KafkaBrokers,
 		cfg.KafkaTopic,
-		10_000,           // queue size
-		100,              // max batch size
-		5*time.Millisecond, // linger time
+		cfg.APIProducerQueueSize,
+		cfg.APIProducerBatchSize,
+		cfg.APIProducerLinger,
 	)
 
 	rdb, err := redispkg.NewClient(cfg.RedisAddr)

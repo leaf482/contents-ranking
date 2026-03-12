@@ -1,67 +1,99 @@
 package config
 
 import (
-	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	KafkaBrokers        []string
-	KafkaTopic          string
-	ServerPort          string
-	RedisAddr           string
-	BatchSize           int
-	BatchFlushInterval  time.Duration
+	KafkaBrokers []string
+	KafkaTopic   string
+	ServerPort   string
+	RedisAddr    string
+
+	BatchSize          int
+	BatchFlushInterval time.Duration
+
+	APIProducerQueueSize int
+	APIProducerBatchSize int
+	APIProducerLinger    time.Duration
 }
 
 func LoadConfig() *Config {
-	_ = godotenv.Load() // .env is optional
 
-	brokerRaw := os.Getenv("KAFKA_BROKERS")
-	if brokerRaw == "" {
-		log.Fatal("config: KAFKA_BROKERS is required but not set")
-	}
+	kafkaBrokers := strings.Split(
+		getEnv("KAFKA_BROKERS", "kafka:29092"),
+		",",
+	)
 
-	topic := os.Getenv("KAFKA_TOPIC")
-	if topic == "" {
-		log.Fatal("config: KAFKA_TOPIC is required but not set")
-	}
+	kafkaTopic := getEnv("KAFKA_TOPIC", "video-heartbeats")
 
-	port := os.Getenv("SERVER_PORT")
-	if port == "" {
-		log.Fatal("config: SERVER_PORT is required but not set")
-	}
+	serverPort := getEnv("PORT", "8080")
 
-	redisAddr := os.Getenv("REDIS_ADDR")
-	if redisAddr == "" {
-		log.Fatal("config: REDIS_ADDR is required but not set")
-	}
+	redisAddr := getEnv("REDIS_ADDR", "redis:6379")
 
-	batchSize := 50
-	if v := os.Getenv("BATCH_SIZE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			batchSize = n
-		}
-	}
+	batchSize := getEnvInt("BATCH_SIZE", 50)
 
-	batchFlushInterval := 100 * time.Millisecond
-	if v := os.Getenv("BATCH_FLUSH_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			batchFlushInterval = d
-		}
-	}
+	batchFlush := getEnvDuration("BATCH_FLUSH_INTERVAL", "100ms")
+
+	apiQueue := getEnvInt("API_PRODUCER_QUEUE_SIZE", 10000)
+
+	apiBatch := getEnvInt("API_PRODUCER_BATCH_SIZE", 100)
+
+	apiLinger := getEnvDuration("API_PRODUCER_LINGER", "5ms")
 
 	return &Config{
-		KafkaBrokers:       strings.Split(brokerRaw, ","),
-		KafkaTopic:         topic,
-		ServerPort:         port,
-		RedisAddr:          redisAddr,
+		KafkaBrokers: kafkaBrokers,
+		KafkaTopic:   kafkaTopic,
+		ServerPort:   serverPort,
+		RedisAddr:    redisAddr,
+
 		BatchSize:          batchSize,
-		BatchFlushInterval: batchFlushInterval,
+		BatchFlushInterval: batchFlush,
+
+		APIProducerQueueSize: apiQueue,
+		APIProducerBatchSize: apiBatch,
+		APIProducerLinger:    apiLinger,
 	}
+}
+
+func getEnv(key, fallback string) string {
+
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+
+	if v := os.Getenv(key); v != "" {
+
+		i, err := strconv.Atoi(v)
+
+		if err == nil {
+			return i
+		}
+	}
+
+	return fallback
+}
+
+func getEnvDuration(key string, fallback string) time.Duration {
+
+	if v := os.Getenv(key); v != "" {
+
+		d, err := time.ParseDuration(v)
+
+		if err == nil {
+			return d
+		}
+	}
+
+	d, _ := time.ParseDuration(fallback)
+
+	return d
 }
