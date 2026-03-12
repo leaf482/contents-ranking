@@ -3,13 +3,18 @@
 import { useCallback, useRef, useState } from 'react';
 import { useInterval } from '@/hooks/useInterval';
 import { LastSynced } from './LastSynced';
-import { GO_API_BASE, SIMULATION_BASE } from '@/lib/config';
+import { GO_API_BASE, SIMULATION_BASE, TRENDING_VELOCITY_THRESHOLD } from '@/lib/config';
 import { getVideoTitle } from '@/lib/videos';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface RankingItem {
   video_id: string;
   score: number;
+}
+
+interface TrendingItem {
+  video_id: string;
+  velocity: number;
 }
 
 interface AttributionDetail {
@@ -73,7 +78,7 @@ function AttributionTooltip({
 
 export function RankingPanel() {
   const [data, setData] = useState<RankingItem[] | null>(null);
-  const [trending, setTrending] = useState<RankingItem[] | null>(null);
+  const [trending, setTrending] = useState<TrendingItem[] | null>(null);
   const [attribution, setAttribution] = useState<Record<string, string[]>>({});
   const [attributionDetail, setAttributionDetail] = useState<
     Record<string, AttributionDetail[]>
@@ -104,10 +109,20 @@ export function RankingPanel() {
       }));
       const trendingJson = await trendingRes.json();
       const rawTrending = Array.isArray(trendingJson) ? trendingJson : [];
-      const trendingItems: RankingItem[] = rawTrending.map((row: { video_id?: string; score?: number; VideoID?: string; Score?: number }) => ({
-        video_id: row.video_id ?? row.VideoID ?? '',
-        score: Number(row.score ?? row.Score ?? 0),
-      }));
+      const trendingItems: TrendingItem[] = rawTrending.map(
+        (row: {
+          video_id?: string;
+          velocity?: number;
+          VideoID?: string;
+          Velocity?: number;
+          score?: number;
+          Score?: number;
+        }) => ({
+          video_id: row.video_id ?? row.VideoID ?? '',
+          // Back-compat: older dashboard code treated "score" as velocity.
+          velocity: Number(row.velocity ?? row.Velocity ?? row.score ?? row.Score ?? 0),
+        }),
+      );
       const attr = await attrRes.json().catch(() => ({}));
       const detail = await detailRes.json().catch(() => ({}));
       setAttribution(typeof attr === 'object' ? attr : {});
@@ -167,7 +182,11 @@ export function RankingPanel() {
 
   const DISPLAY_LIMIT = 10;
   const displayGlobal = data ? data.slice(0, DISPLAY_LIMIT) : [];
-  const displayTrending = trending ? trending.slice(0, DISPLAY_LIMIT) : [];
+  const displayTrending = trending
+    ? trending
+        .filter((t) => t.velocity >= TRENDING_VELOCITY_THRESHOLD)
+        .slice(0, DISPLAY_LIMIT)
+    : [];
 
   const getVideoStats = (videoId: string) => {
     const details = attributionDetail[videoId] ?? [];
@@ -291,7 +310,7 @@ export function RankingPanel() {
                       {getVideoTitle(item.video_id)}
                     </span>
                     <span className="text-right">
-                      <NumberTicker value={Math.round(item.score)} animate={false} />
+                      <NumberTicker value={Math.round(item.velocity)} animate={false} />
                     </span>
                   </motion.li>
                 ))}

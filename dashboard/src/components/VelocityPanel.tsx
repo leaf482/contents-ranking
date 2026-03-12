@@ -8,7 +8,7 @@ import { LastSynced } from './LastSynced';
  
 interface TrendingItem {
   video_id: string;
-  score: number; // velocity
+  velocity: number;
 }
 
 const LIMIT = 10;
@@ -30,12 +30,15 @@ export function VelocityPanel() {
       const normalized: TrendingItem[] = rows.map(
         (row: {
           video_id?: string;
+          velocity?: number;
           score?: number;
           VideoID?: string;
+          Velocity?: number;
           Score?: number;
         }) => ({
           video_id: row.video_id ?? row.VideoID ?? '',
-          score: Number(row.score ?? row.Score ?? 0),
+          // Back-compat: older payloads used "score" as velocity.
+          velocity: Number(row.velocity ?? row.Velocity ?? row.score ?? row.Score ?? 0),
         }),
       );
       setItems(normalized);
@@ -49,7 +52,7 @@ export function VelocityPanel() {
 
   const max = Math.max(
     1,
-    ...items.map((i) => Math.round(i.score)),
+    ...items.map((i) => Math.round(i.velocity)),
   );
 
   return (
@@ -65,7 +68,7 @@ export function VelocityPanel() {
       ) : (
         <div className="min-h-0 flex-1 space-y-2 overflow-hidden">
           {items.map((it) => {
-            const v = Math.round(it.score);
+            const v = Math.round(it.velocity);
             const pct = Math.max(0, Math.min(1, v / max));
             return (
               <div
