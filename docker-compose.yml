@@ -79,8 +79,8 @@ services:
       context: .
       dockerfile: Dockerfile.api
     container_name: go-api
-    ports:
-      - "8080:8080"
+    # Host port binding removed — dashboard talks to go-api via internal Docker network.
+    # To call the API from host: docker exec or use the dashboard proxy at localhost:3002/api/go
     environment:
       KAFKA_BROKERS: kafka:29092
       KAFKA_TOPIC: video-heartbeats
@@ -115,6 +115,22 @@ services:
         condition: service_healthy
     # No host port binding — metrics (8081) internal only for Prometheus
 
+  go-ai-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.ai-worker
+    container_name: go-ai-worker
+    environment:
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TOPIC: video-heartbeats
+      CLOUDFLARE_WORKER_URL: ${CLOUDFLARE_WORKER_URL}
+    networks:
+      - contents-ranking-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
   simulation-service:
     build:
       context: ./simulation-service
@@ -143,6 +159,7 @@ services:
       # Server-side proxy targets
       GO_API_URL: http://go-api:8080
       SIMULATION_URL: http://simulation-service:3000
+      CLOUDFLARE_WORKER_URL: ${CLOUDFLARE_WORKER_URL}
       # Client-side base URLs (use dashboard /api proxies by default)
       NEXT_PUBLIC_GO_API_URL: /api/go
       NEXT_PUBLIC_SIMULATION_URL: /api/sim

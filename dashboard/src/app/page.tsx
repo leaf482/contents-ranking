@@ -9,6 +9,7 @@ import { RankingPanel } from '@/components/RankingPanel';
 import { PipelineStatusPanel } from '@/components/PipelineStatusPanel';
 import { LiveEventStream } from '@/components/LiveEventStream';
 import { VelocityPanel } from '@/components/VelocityPanel';
+import { AIChatPanel } from '@/components/AIChatPanel';
 
 export default function DashboardPage() {
   return (
@@ -53,6 +54,14 @@ export default function DashboardPage() {
             <div className="rounded-lg border border-gray-700 bg-gray-900/30 p-4">
               <LiveEventStream />
             </div>
+          </section>
+
+          {/* AI Assistant — Cloudflare Workers AI + Durable Object memory */}
+          <section>
+            <p className="mb-3 text-xs font-medium uppercase tracking-wider text-gray-500">
+              AI Assistant · Powered by Cloudflare Workers AI
+            </p>
+            <AIChatPanel />
           </section>
         </div>
       </main>
